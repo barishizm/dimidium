@@ -230,7 +230,12 @@ class FakeTwilioCall:
         assert stream is not None
         params = {p.get("name"): p.get("value") for p in stream.findall("Parameter")}
 
-        self._context = client.websocket_connect("/twilio/stream")
+        stream_signature = compute_signature(
+            BASE_URL.replace("https://", "wss://") + "/twilio/stream", {}, "secret"
+        )
+        self._context = client.websocket_connect(
+            "/twilio/stream", headers={"X-Twilio-Signature": stream_signature}
+        )
         self._ws = ws = self._context.__enter__()
         ws.send_json({"event": "connected", "protocol": "Call", "version": "1.0.0"})
         ws.send_json(

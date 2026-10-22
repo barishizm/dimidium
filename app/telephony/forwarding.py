@@ -53,6 +53,9 @@ class CallForwarder:
         session = CALL_SESSION_REGISTRY.get(call_sid)
         if session is None:
             return "📵 Arama artık devam etmiyor."
+        if not session.forward_allowed:
+            logger.warning("Forward refused: call was not offered forwarding")
+            return "⚠️ Bu arama yönlendirilemez."
         s = self._settings
         assert s.twilio_account_sid and s.twilio_auth_token
         url = f"{TWILIO_API}/Accounts/{s.twilio_account_sid}/Calls/{call_sid}.json"

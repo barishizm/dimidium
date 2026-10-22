@@ -53,6 +53,7 @@ Items, in the order they usually come up:
 ## Commands (fill in as the project grows)
 - run: uvicorn app.main:app --reload
 - test: pytest -q
+- adversarial model tests (real API, needs ANTHROPIC_API_KEY): pytest -q -m integration
 - lint: ruff check . && black --check .
 - local test call (no Twilio): python scripts/fake_twilio_call.py --say "..."
 - twilio setup check: python scripts/check_twilio.py [--set-webhook]

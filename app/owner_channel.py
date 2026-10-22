@@ -85,7 +85,7 @@ class DecisionCallback(CallbackData, prefix="od"):
     """Button payload: which call, which question on that call, which choice."""
 
     call_sid: str = Field(pattern=r"^[A-Za-z0-9_-]{1,40}$")
-    nonce: str = Field(pattern=r"^[0-9a-f]{6}$")
+    nonce: str = Field(pattern=r"^[0-9a-f]{8}$")
     choice: str = Field(pattern=rf"^([0-{MAX_OWNER_OPTIONS - 1}]|{CHOICE_WRITE}|{CHOICE_REJECT})$")
 
 
@@ -224,7 +224,7 @@ class OwnerChannel:
             raise ValueError(f"A decision is already pending for call {short_call_id(call_sid)}")
         pending = PendingDecision(
             call_sid=call_sid,
-            nonce=secrets.token_hex(3),
+            nonce=secrets.token_hex(4),
             text=format_request(call_sid, summary_tr, caller_number, caller_said),
             options=options,
             future=asyncio.get_running_loop().create_future(),

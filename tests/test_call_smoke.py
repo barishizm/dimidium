@@ -92,7 +92,10 @@ def test_call_greets_from_cache_and_cleans_up(client: TestClient) -> None:
     token = {p.get("name"): p.get("value") for p in stream.findall("Parameter")}["stream_token"]
 
     media: list[bytes] = []
-    with client.websocket_connect("/twilio/stream") as ws:
+    stream_signature = compute_signature("wss://abc.ngrok-free.app/twilio/stream", {}, "secret")
+    with client.websocket_connect(
+        "/twilio/stream", headers={"X-Twilio-Signature": stream_signature}
+    ) as ws:
         ws.send_json({"event": "connected", "protocol": "Call", "version": "1.0.0"})
         ws.send_json(
             {

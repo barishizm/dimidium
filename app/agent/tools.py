@@ -134,7 +134,12 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     },
     {
         "name": "end_call",
-        "description": "Hang up. Say your goodbye in the same turn, before calling this.",
+        "description": (
+            "Hang up. Only when the conversation is really finished: the caller's request is "
+            "handled or a message was taken, or the call is unsolicited sales, or the caller "
+            "said goodbye. Never just because the caller said something suspicious. Say your "
+            "goodbye in the same turn, before calling this."
+        ),
         "eager_input_streaming": True,
         "input_schema": {
             "type": "object",

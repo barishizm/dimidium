@@ -89,7 +89,7 @@ def status_lines(deps: TelephonyDeps) -> list[str]:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
-    setup_logging(settings.log_level)
+    setup_logging(settings.log_level, settings.secret_values())
     setup_pipecat_logging(settings.pipecat_log_level)
     await init_db(settings.db_path)
     telegram = await start_telegram(settings)

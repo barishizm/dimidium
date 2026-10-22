@@ -77,7 +77,9 @@ async def caller_audio(args: argparse.Namespace) -> list[tuple[str, bytes]]:
     return lines
 
 
-async def open_call(args: argparse.Namespace, call_sid: str) -> tuple[str, dict[str, str]]:
+async def open_call(
+    args: argparse.Namespace, call_sid: str
+) -> tuple[str, dict[str, str], dict[str, str]]:
     settings = get_settings()
     form = {"CallSid": call_sid, "From": args.caller, "To": args.to, "CallStatus": "ringing"}
     headers = {}
@@ -98,7 +100,13 @@ async def open_call(args: argparse.Namespace, call_sid: str) -> tuple[str, dict[
         raise SystemExit(f"The app did not offer a media stream:\n{response.text}")
     params = {p.get("name", ""): p.get("value", "") for p in stream.findall("Parameter")}
     ws_url = args.base_url.replace("https://", "wss://").replace("http://", "ws://")
-    return f"{ws_url}/twilio/stream", params
+    ws_headers: dict[str, str] = {}
+    if token:
+        # Twilio signs the stream handshake as well: the wss URL, no parameters.
+        ws_headers["X-Twilio-Signature"] = compute_signature(
+            settings.public_ws_base_url + "/twilio/stream", {}, token
+        )
+    return f"{ws_url}/twilio/stream", params, ws_headers
 
 
 async def send_audio(
@@ -210,12 +218,12 @@ async def main() -> int:
     print("Preparing caller audio...")
     lines = await caller_audio(args)
     call_sid = "CA" + secrets.token_hex(16)
-    stream_url, params = await open_call(args, call_sid)
+    stream_url, params, ws_headers = await open_call(args, call_sid)
     stream_sid = "MZ" + secrets.token_hex(16)
     state = CallState()
     print(f"Call {call_sid[-4:]} -> {stream_url}")
 
-    async with websockets.connect(stream_url, max_size=None) as ws:
+    async with websockets.connect(stream_url, max_size=None, additional_headers=ws_headers) as ws:
         await ws.send(json.dumps({"event": "connected", "protocol": "Call", "version": "1.0.0"}))
         await ws.send(
             json.dumps(

@@ -3,6 +3,7 @@ from collections.abc import Iterator
 
 import pytest
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 from app.config import get_settings
 from app.main import app
@@ -15,6 +16,8 @@ from app.telephony.twilio_webhook import (
 )
 
 TOKEN = "12345"
+STREAM_URL = "wss://abc.ngrok-free.app/twilio/stream"
+STREAM_HEADERS = {"X-Twilio-Signature": compute_signature(STREAM_URL, {}, TOKEN)}
 URL = "https://abc.ngrok-free.app/twilio/voice"
 PARAMS = {"CallSid": "CA123", "From": "+37060000000", "To": "+37052000000", "Digits": "1234"}
 FORM = {k: [v] for k, v in PARAMS.items()}
@@ -115,7 +118,7 @@ def test_stream_rejects_unknown_token(client: TestClient) -> None:
     client.post(
         "/twilio/voice", data=PARAMS, headers={"X-Twilio-Signature": TWILIO_REFERENCE_SIGNATURE}
     )
-    with client.websocket_connect("/twilio/stream") as ws:
+    with client.websocket_connect("/twilio/stream", headers=STREAM_HEADERS) as ws:
         ws.send_json({"event": "connected", "protocol": "Call", "version": "1.0.0"})
         ws.send_json(
             {
@@ -329,3 +332,23 @@ def test_concurrent_call_cap(
     get_settings.cache_clear()
     assert post(client, "/twilio/voice", CallSid="CA1", From=MOM).find("Connect") is not None
     assert post(client, "/twilio/voice", CallSid="CA2", From=MOM).find("Reject") is not None
+
+
+def test_stream_rejects_missing_or_bad_signature(client: TestClient) -> None:
+    client.post(
+        "/twilio/voice", data=PARAMS, headers={"X-Twilio-Signature": TWILIO_REFERENCE_SIGNATURE}
+    )
+    for headers in ({}, {"X-Twilio-Signature": "bogus"}):
+        with (
+            pytest.raises(WebSocketDisconnect),
+            client.websocket_connect("/twilio/stream", headers=headers) as ws,
+        ):
+            ws.receive_text()
+    # The call's one-time stream token is untouched: the real stream can still connect.
+    session = CALL_SESSION_REGISTRY.get("CA123")
+    assert session is not None and session.stream_token
+
+
+def test_stream_signature_accepts_default_port_variant() -> None:
+    signed = compute_signature("wss://abc.ngrok-free.app:443/twilio/stream", {}, TOKEN)
+    assert is_valid_signature(STREAM_URL, {}, signed, TOKEN)

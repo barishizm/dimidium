@@ -39,3 +39,5 @@ class CallSession:
     message_only: bool = False
     # False in "off" mode: everything is stored for /calls and /messages, nothing is pushed.
     notify_owner: bool = True
+    # Only allowlisted callers whose ring alert offered "forward to my phone" may be forwarded.
+    forward_allowed: bool = False

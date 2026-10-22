@@ -48,6 +48,7 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.utils.text.base_text_aggregator import AggregationType
 
 from app.agent.brain import AgentBrain
+from app.agent.guards import sanitize_for_speech
 from app.config import Settings
 from app.models import CallSession, TranscriptTurn
 from app.speech.base import TELEPHONY_SAMPLE_RATE
@@ -284,6 +285,10 @@ class AgentBrainService(FrameProcessor):
     # --- speaking ----------------------------------------------------------------------------
 
     async def _say_sentence(self, sentence: str) -> None:
+        # Last gate before TTS: nothing unspeakable (markdown, emojis) reaches the caller.
+        sentence = sanitize_for_speech(sentence)
+        if not sentence:
+            return
         if not self._response_open:
             await self.push_frame(LLMFullResponseStartFrame())
             self._response_open = True

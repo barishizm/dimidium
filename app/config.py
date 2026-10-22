@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     off_mode_action: OffModeAction = "voicemail"
     # Your real phone number (E.164). Allowlisted callers can be forwarded here via <Dial>.
     owner_forward_number: str | None = None
+    # Comma-separated private details the agent must never speak (street, city district,
+    # workplace, family names...). The owner's numbers are always included. Matched in code.
+    private_terms: str = ""
     forward_ring_seconds: int = Field(default=20, ge=5, le=60)
 
     # Anthropic
@@ -134,6 +137,22 @@ class Settings(BaseSettings):
     def stt_language_list(self) -> tuple[str, ...]:
         languages = tuple(code.strip() for code in self.stt_languages.split(",") if code.strip())
         return languages or (self.caller_language,)
+
+    @property
+    def private_term_list(self) -> list[str]:
+        return [term.strip() for term in self.private_terms.split(",") if term.strip()]
+
+    def secret_values(self) -> list[str]:
+        """Every configured secret, so logging can mask them wherever they appear."""
+        secrets = [
+            self.anthropic_api_key,
+            self.telegram_bot_token,
+            self.twilio_auth_token,
+            self.azure_speech_key,
+            self.deepgram_api_key,
+            self.elevenlabs_api_key,
+        ]
+        return [s.get_secret_value() for s in secrets if s is not None and s.get_secret_value()]
 
     @property
     def public_ws_base_url(self) -> str:

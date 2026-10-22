@@ -52,6 +52,9 @@ packages = ["app", "app.agent", "app.speech", "app.telephony"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = [
+    "integration: calls real external APIs (skipped without credentials)",
+]
 
 [tool.black]
 line-length = 100

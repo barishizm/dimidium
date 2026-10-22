@@ -65,6 +65,24 @@ async def _signed_form(request: Request, settings: Settings) -> dict[str, list[s
     return params
 
 
+def _stream_signature_ok(websocket: WebSocket, settings: Settings) -> bool:
+    """Twilio signs the media-stream handshake too: HMAC over the wss URL, no parameters."""
+    if not settings.twilio_validate_signature:
+        return True
+    if settings.twilio_auth_token is None:
+        logger.error("TWILIO_AUTH_TOKEN is not set; cannot validate the stream signature")
+        return False
+    url = settings.public_ws_base_url + websocket.url.path
+    if websocket.url.query:
+        url += "?" + websocket.url.query
+    return is_valid_signature(
+        url,
+        {},
+        websocket.headers.get("x-twilio-signature"),
+        settings.twilio_auth_token.get_secret_value(),
+    )
+
+
 def _field(params: dict[str, list[str]], name: str) -> str:
     values = params.get(name)
     return values[0] if values else ""
@@ -119,15 +137,16 @@ async def voice(request: Request) -> Response:
         logger.warning("Rate limit: caller called too often, rejected", extra=log)
         return _xml(reject_twiml())
 
-    message_only, notify_owner = False, True
+    message_only, notify_owner, forward_allowed = False, True, False
     mode = deps.modes.mode
     if allowed is not None:
+        forward_allowed = allowed.offer_forward and deps.forwarder.problem is None
         if deps.owner_channel is not None:
             deps.spawn(
                 deps.owner_channel.send_ring_alert(
                     call_sid,
                     f"📞 {allowed.alert_text} — asistan karşılıyor.",
-                    offer_forward=allowed.offer_forward and deps.forwarder.problem is None,
+                    offer_forward=forward_allowed,
                 )
             )
     elif mode is AnswerMode.OFF:
@@ -139,7 +158,9 @@ async def voice(request: Request) -> Response:
         message_only = True
 
     logger.info("Incoming call", extra={**log, "mode": str(mode), "message_only": message_only})
-    return _open_stream(deps, settings, call_sid, caller, message_only, notify_owner)
+    return _open_stream(
+        deps, settings, call_sid, caller, message_only, notify_owner, forward_allowed
+    )
 
 
 @router.post("/dial-done")
@@ -168,6 +189,7 @@ def _open_stream(
     caller: str,
     message_only: bool,
     notify_owner: bool,
+    forward_allowed: bool = False,
 ) -> Response:
     if deps.speech_problem:
         logger.error("Call %s rejected: speech not configured (%s)", call_sid, deps.speech_problem)
@@ -179,6 +201,7 @@ def _open_stream(
         CALL_SESSION_REGISTRY.add(session)
     session.message_only = message_only
     session.notify_owner = notify_owner
+    session.forward_allowed = forward_allowed
     token = secrets.token_urlsafe(24)
     session.stream_token = token
     asyncio.get_running_loop().call_later(
@@ -200,6 +223,10 @@ def _expire_unconnected(call_sid: str, token: str) -> None:
 
 @router.websocket("/stream")
 async def stream(websocket: WebSocket) -> None:
+    if not _stream_signature_ok(websocket, get_settings()):
+        logger.warning("Rejected media stream with an invalid signature")
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
     await websocket.accept()
     try:
         transport_type, call_data = await asyncio.wait_for(

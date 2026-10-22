@@ -23,7 +23,7 @@ def settings(**overrides: object) -> Settings:
 
 @pytest.fixture
 def live_call() -> CallSession:
-    session = CallSession(call_sid="CA1", caller_number="+37060000001")
+    session = CallSession(call_sid="CA1", caller_number="+37060000001", forward_allowed=True)
     CALL_SESSION_REGISTRY.add(session)
     yield session  # type: ignore[misc]
     CALL_SESSION_REGISTRY.remove("CA1")
@@ -101,4 +101,20 @@ async def test_failed_forward_clears_the_flag(live_call: CallSession) -> None:
 
     forwarder = CallForwarder(settings(), transport=httpx.MockTransport(boom))
     assert "ulaşılamadı" in await forwarder.forward("CA1")
+    assert "forwarded_to_owner" not in live_call.collected_info
+
+
+async def test_forward_refused_for_a_call_not_offered_forwarding(live_call: CallSession) -> None:
+    # A forged or stale forward button for an ordinary (not allowlisted) call does nothing.
+    live_call.forward_allowed = False
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={})
+
+    forwarder = CallForwarder(settings(), transport=httpx.MockTransport(handler))
+    outcome = await forwarder.forward("CA1")
+    assert "yönlendirilemez" in outcome
+    assert requests == []
     assert "forwarded_to_owner" not in live_call.collected_info

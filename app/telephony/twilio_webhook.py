@@ -8,7 +8,7 @@ from urllib.parse import urlsplit, urlunsplit
 from xml.sax.saxutils import escape, quoteattr
 
 STREAM_PATH = "/twilio/stream"
-_DEFAULT_PORTS = {"https": 443, "http": 80}
+_DEFAULT_PORTS = {"https": 443, "http": 80, "wss": 443, "ws": 80}
 
 
 def compute_signature(url: str, params: Mapping[str, Sequence[str]], auth_token: str) -> str:

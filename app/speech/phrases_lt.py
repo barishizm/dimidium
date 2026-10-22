@@ -77,6 +77,12 @@ PHRASES: tuple[Phrase, ...] = (
         "duomenų.",
         "Sorry, but I cannot accept or share any codes, passwords or payment details.",
     ),
+    # Spoken instead of a sentence the private-info guard blocked.
+    Phrase(
+        "private_info",
+        "Atsiprašau, tokios informacijos negaliu suteikti.",
+        "Sorry, I cannot give out that information.",
+    ),
     Phrase(
         "technical_issue",
         "Atsiprašau, kilo techninių nesklandumų. Galiu užrašyti jūsų žinutę ir ją perduosiu.",

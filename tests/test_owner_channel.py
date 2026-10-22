@@ -153,11 +153,11 @@ async def test_unauthorized_chat_is_ignored(channel: OwnerChannel, bot: FakeBot)
     [
         "garbage",
         "od:only:two",
-        f"xx:{CALL_A}:abcdef:0",
+        f"xx:{CALL_A}:abcdef01:0",
         f"od:{CALL_A}:ABCDEF:0",
-        f"od:{CALL_A}:abcdef:7",
-        f"od:{CALL_A}:abcdef:0:extra",
-        "od:bad sid!:abcdef:0",
+        f"od:{CALL_A}:abcdef01:7",
+        f"od:{CALL_A}:abcdef01:0:extra",
+        "od:bad sid!:abcdef01:0",
     ],
 )
 def test_parse_callback_rejects_tampered_data(data: str) -> None:
@@ -169,7 +169,7 @@ async def test_wrong_nonce_or_out_of_range_choice_does_not_resolve(
 ) -> None:
     future, message_id = await request(channel)
     nonce = channel._pending[CALL_A].nonce
-    other_nonce = "000000" if nonce != "000000" else "111111"
+    other_nonce = "00000000" if nonce != "00000000" else "11111111"
     stale = DecisionCallback(call_sid=CALL_A, nonce=other_nonce, choice="0").pack()
     assert await click(channel, stale, message_id) == EXPIRED_TEXT
     out_of_range = DecisionCallback(call_sid=CALL_A, nonce=nonce, choice="3").pack()
@@ -222,7 +222,7 @@ async def test_ask_cancelled_when_call_ends(bot: FakeBot) -> None:
 
 
 async def test_unknown_request_click_removes_buttons(channel: OwnerChannel, bot: FakeBot) -> None:
-    data = DecisionCallback(call_sid=CALL_A, nonce="abcdef", choice="0").pack()
+    data = DecisionCallback(call_sid=CALL_A, nonce="abcdef01", choice="0").pack()
     assert await click(channel, data, 55) == EXPIRED_TEXT
     assert bot.edits == [{"text": None, "chat_id": OWNER, "message_id": 55, "reply_markup": None}]
 
