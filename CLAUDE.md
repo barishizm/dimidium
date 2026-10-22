@@ -15,7 +15,7 @@ Owner loop: Claude calls tool `ask_owner(summary, options)` -> app sends Telegra
 
 ## Stack
 - Python 3.11+, FastAPI, uvicorn, Pipecat (check the CURRENT Pipecat docs/API before writing code, the API changes often), aiogram v3 for Telegram, Pydantic settings, SQLite (aiosqlite) for call logs, pytest.
-- Anthropic API, model name configurable via env var (default "claude-sonnet-5-5").
+- Anthropic API, model name configurable via env var (default "claude-haiku-5-5").
 - STT/TTS providers must be behind an interface so Google and Azure can be swapped via config.
 
 ## Hard rules for the agent (must be enforced in the system prompt AND in code where possible)
@@ -54,3 +54,5 @@ Items, in the order they usually come up:
 - run: uvicorn app.main:app --reload
 - test: pytest -q
 - lint: ruff check . && black --check .
+- local test call (no Twilio): python scripts/fake_twilio_call.py --say "..."
+- twilio setup check: python scripts/check_twilio.py [--set-webhook]

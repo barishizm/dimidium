@@ -71,3 +71,18 @@ def setup_logging(level: str = "INFO") -> None:
         logger = logging.getLogger(name)
         logger.handlers.clear()
         logger.propagate = True
+
+
+def setup_pipecat_logging(level: str = "WARNING") -> None:
+    """Send Pipecat's loguru output through our JSON handler (and its number redaction)."""
+    from loguru import logger as loguru_logger
+
+    target = logging.getLogger("pipecat")
+
+    def sink(message: Any) -> None:
+        record = message.record
+        # loguru level numbers line up with logging's (DEBUG 10, INFO 20, WARNING 30, ...).
+        target.log(record["level"].no, "%s", record["message"])
+
+    loguru_logger.remove()
+    loguru_logger.add(sink, level=level.upper(), format="{message}")

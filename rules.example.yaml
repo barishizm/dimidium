@@ -1,0 +1,44 @@
+# Copy to rules.yaml (git-ignored) and edit. Phone numbers in E.164 (+370...) or national format.
+#
+# action values:
+#   notify_immediately  trusted contact: do not screen, ask the owner right away
+#   screen              gather details, then ask the owner (default for keyword rules)
+#   polite_reject       decline politely without asking the owner
+
+known_numbers:
+  - number: "+37060000001"
+    name: "Partner"
+    relation: partner
+    action: notify_immediately
+  - number: "+37060000002"
+    name: "Mom"
+    relation: family
+    action: notify_immediately
+
+keyword_rules:
+  - name: courier
+    keywords: [kurjer, siunt, pakuot, DPD, Omniva, LP Express, DHL, UPS, Venipak, Itella, courier, parcel]
+    action: screen
+    allowed_actions:
+      - leave the parcel at the door
+      - leave it with a neighbour
+      - deliver to a parcel locker
+      - redeliver another day
+    guidance: >-
+      Ask which company, which parcel or sender if known, and what the courier proposes.
+      Do not say whether the owner is home; ask the owner instead.
+  - name: service_shop
+    keywords: [servis, remont, taisym, meistr, autoservis, repair, workshop]
+    action: screen
+    allowed_actions:
+      - approve the repair or quote
+      - ask them to send details by SMS
+      - the owner will call back
+    guidance: Ask what was found, the price and the deadline.
+  - name: sales
+    keywords: [pasiūlym, akcij, nuolaid, apklaus, reklam, tarif, offer, survey, promotion]
+    action: polite_reject
+    guidance: Unsolicited sales or surveys - decline politely and end the call without asking the owner.
+
+unknown_caller_guidance: >-
+  Unknown caller: find out who they are and why they call, then ask the owner.

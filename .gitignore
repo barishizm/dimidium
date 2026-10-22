@@ -20,6 +20,10 @@ dist/
 htmlcov/
 
 # Local data
+out/
+# Speech test recordings (real calls contain personal data)
+samples/
+rules.yaml
 data/
 *.db
 *.sqlite3

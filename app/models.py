@@ -32,3 +32,6 @@ class CallSession:
     status: CallStatus = CallStatus.RINGING
     collected_info: dict[str, Any] = field(default_factory=dict)
     owner_decision: str | None = None
+    ended_at: datetime | None = None
+    # One-time secret handed to Twilio in the TwiML; the media stream must present it.
+    stream_token: str | None = None
