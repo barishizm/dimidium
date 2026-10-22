@@ -1,0 +1,49 @@
+# Render Blueprint: one always-on Docker web service in Frankfurt with a disk for SQLite.
+# Dashboard -> New -> Blueprint -> pick this repo. Values marked sync: false are asked for once.
+# See README "Deployment" and docs/SETUP.md.
+services:
+  - type: web
+    name: dimidium-jarvis
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    # Paid plan: the free plan sleeps after inactivity (cold start = silent callers, no
+    # Telegram bot) and cannot have a disk.
+    plan: starter
+    region: frankfurt
+    numInstances: 1
+    healthCheckPath: /health
+    # SIGTERM -> active calls hear a goodbye (SHUTDOWN_GRACE_SECONDS, 20 s) -> exit.
+    maxShutdownDelaySeconds: 30
+    autoDeploy: false
+    disk:
+      name: data
+      mountPath: /srv/data
+      sizeGB: 1
+    envVars:
+      - key: PUBLIC_BASE_URL
+        sync: false   # https://<service>.onrender.com, or your custom domain
+      - key: OWNER_NAME
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_OWNER_CHAT_ID
+        sync: false
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_PHONE_NUMBER
+        sync: false
+      - key: GOOGLE_CLOUD_PROJECT
+        sync: false
+      # Upload the key and rules as Secret Files (Environment tab): google.json, rules.yaml.
+      - key: GOOGLE_APPLICATION_CREDENTIALS
+        value: /etc/secrets/google.json
+      - key: RULES_PATH
+        value: /etc/secrets/rules.yaml
+      - key: STT_PROVIDER
+        value: google
+      - key: TTS_PROVIDER
+        value: google

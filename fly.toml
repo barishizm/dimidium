@@ -1,0 +1,67 @@
+# Fly.io: one always-on machine in Europe. See README "Deployment" and docs/SETUP.md.
+#   fly launch --no-deploy --copy-config   (pick a unique app name, keep this file)
+#   fly volumes create dimidium_data --region arn --size 1
+#   fly secrets set ANTHROPIC_API_KEY=... TELEGRAM_BOT_TOKEN=... (see README)
+#   fly deploy
+
+app = "dimidium-jarvis"   # change to your own unique name
+# Stockholm. Frankfurt ("fra") is the other close option; `fly platform regions` lists all.
+primary_region = "arn"
+
+# SIGTERM -> active calls hear a goodbye (SHUTDOWN_GRACE_SECONDS, 20 s) -> exit.
+kill_signal = "SIGTERM"
+kill_timeout = 30
+
+[build]
+  [build.args]
+    EXTRAS = "google"   # "google,azure" if you use Azure Speech
+
+[deploy]
+  # One machine with a volume is replaced in place, never overlapped (two copies would both
+  # poll Telegram and share the SQLite file). Expect ~20-40 s without answering; deploy
+  # when no call is active (/status in Telegram).
+  strategy = "rolling"
+
+[env]
+  PORT = "8000"
+  LOG_LEVEL = "INFO"
+  RULES_PATH = "/srv/config/rules.yaml"
+  GOOGLE_APPLICATION_CREDENTIALS = "/srv/config/google.json"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  # Never stop or scale to zero: a cold start would make callers wait in silence and stop
+  # the Telegram bot. Exactly one machine.
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = "connections"
+    soft_limit = 50
+    hard_limit = 100
+
+  [[http_service.checks]]
+    grace_period = "30s"
+    interval = "15s"
+    method = "GET"
+    path = "/health"
+    timeout = "5s"
+
+[[mounts]]
+  source = "dimidium_data"
+  destination = "/srv/data"
+
+# Files written at boot from secrets (the secret value must be base64, see README).
+# Uncomment after setting the secret; a missing secret fails the deploy.
+# [[files]]
+#   guest_path = "/srv/config/google.json"
+#   secret_name = "GOOGLE_CREDENTIALS_B64"
+# [[files]]
+#   guest_path = "/srv/config/rules.yaml"
+#   secret_name = "RULES_YAML_B64"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "1gb"

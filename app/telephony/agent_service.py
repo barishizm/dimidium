@@ -8,7 +8,9 @@ history lives in AgentBrain, not in Pipecat's context, because the brain owns th
 Beyond replying, this stage keeps the line from going silent and the call bounded:
 - the disclosure greeting is spoken from code (pre-synthesized), never left to the model;
 - filler phrases when the model is slow; a stuck turn counts as an LLM failure;
-- hold music and "still trying" phrases while the owner is asked;
+- hold music and "still trying" phrases while the owner is asked; what the caller says on
+  hold is buffered (never an LLM turn), answered with a canned phrase, and handed to the
+  model together with the owner's decision;
 - after two LLM failures, or when TTS fails, it takes a message using cached phrases only;
 - call-length, turn and caller-silence limits.
 """
@@ -29,12 +31,14 @@ from pipecat.frames.frames import (
     EndFrame,
     EndWorkerFrame,
     Frame,
+    InterimTranscriptionFrame,
     InterruptionFrame,
     LLMContextFrame,
     LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
     OutputAudioRawFrame,
     StartFrame,
+    TranscriptionFrame,
     TTSSpeakFrame,
     UserStartedSpeakingFrame,
     UserStoppedSpeakingFrame,
@@ -62,6 +66,8 @@ _HOLD_CHUNK_SECONDS = 0.1
 _HOLD_LEAD_SECONDS = 0.3
 # Wait at most this long for "please hold" to finish before hold music starts.
 _HOLD_SPEECH_WAIT = 8.0
+# At most one canned "yes, I am here" per this many seconds, however much the caller talks.
+_HOLD_REPLY_MIN_GAP = 6.0
 _MAX_IDLE_PROMPTS = 2
 
 
@@ -92,15 +98,20 @@ class AgentBrainService(FrameProcessor):
         *,
         session: CallSession,
         limits: CallLimits,
-        hold_phrase_audio: Callable[[], bytes | None],
+        hold_phrase_audio: Callable[[str], bytes | None],
         persist: Callable[[], Awaitable[None]],
+        hold_music: bytes | None = None,
+        greeting_key: str = "greeting",
         clock: Callable[[], float] = time.monotonic,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
         self._session = session
+        self._greeting_key = greeting_key
         self._limits = limits
+        # Phrase key -> cached 8 kHz PCM (None if not cached: then nothing is played).
         self._hold_phrase_audio = hold_phrase_audio
+        self._hold_music = hold_music or hold_music_pcm()
         self._persist = persist
         self._clock = clock
         self._brain: AgentBrain | None = None
@@ -116,6 +127,10 @@ class AgentBrainService(FrameProcessor):
         self._turn_task: asyncio.Task[None] | None = None
         self._filler_task: asyncio.Task[None] | None = None
         self._hold_task: asyncio.Task[None] | None = None
+        # Caller utterances heard during the current hold, and a pending canned reply.
+        self._hold_heard: list[str] = []
+        self._hold_reply_due = False
+        self._last_hold_reply: float | None = None
         self._monitor_task: asyncio.Task[None] | None = None
         self._response_open = False
         self._started_at: float | None = None
@@ -142,7 +157,7 @@ class AgentBrainService(FrameProcessor):
         """The pipeline has started: speak the disclosure greeting and start the call clock."""
         self._started_at = self._clock()
         self._last_activity = self._started_at
-        greeting = phrase("greeting")
+        greeting = phrase(self._greeting_key)
         if self._brain is not None:
             self._brain.add_opening(greeting)
         await self._speak(greeting)
@@ -205,6 +220,10 @@ class AgentBrainService(FrameProcessor):
         self._last_activity = self._clock()
         self._idle_prompts = 0
         if self.mode is Mode.CLOSING or self._brain is None:
+            return
+        if self.on_hold:
+            # A turn that completed just as the hold began: never cancel the pending ask.
+            self.on_hold_utterance(text)
             return
         if self.mode is Mode.MESSAGE:
             await self._take_message(text)
@@ -313,14 +332,20 @@ class AgentBrainService(FrameProcessor):
     # --- hold --------------------------------------------------------------------------------
 
     @asynccontextmanager
-    async def hold(self) -> AsyncIterator[None]:
-        """Caller on hold while the owner is asked: music plus a periodic phrase, caller muted."""
+    async def hold(self) -> AsyncIterator[list[str]]:
+        """Caller on hold while the owner is asked: music plus a periodic phrase, caller muted.
+
+        Yields the list that collects what the caller says during the hold.
+        """
         self._disarm_filler()
         await self._close_response()
         self.on_hold = True
+        heard: list[str] = []
+        self._hold_heard = heard
+        self._hold_reply_due = False
         self._hold_task = self.create_task(self._play_hold(), name="hold")
         try:
-            yield
+            yield heard
         finally:
             self.on_hold = False
             await self._cancel(self._hold_task)
@@ -331,21 +356,40 @@ class AgentBrainService(FrameProcessor):
             if self.mode is Mode.AGENT:
                 self._arm_filler()
 
+    def on_hold_utterance(self, text: str) -> None:
+        """The caller spoke during the hold: keep it for the model, answer with a canned phrase."""
+        text = text.strip()
+        if not text or not self.on_hold:
+            return
+        self._hold_heard.append(text)
+        self._session.transcript.append(TranscriptTurn(speaker="caller", text=text))
+        now = self._clock()
+        if self._last_hold_reply is None or now - self._last_hold_reply >= _HOLD_REPLY_MIN_GAP:
+            self._last_hold_reply = now
+            self._hold_reply_due = True
+
     async def _play_hold(self) -> None:
         # Let "please hold" finish first, so the music does not talk over it.
         if self._bot_speaking:
             with suppress(TimeoutError):
                 await asyncio.wait_for(self._bot_stopped.wait(), _HOLD_SPEECH_WAIT)
-        music = hold_music_pcm()
+        music = self._hold_music
         chunk = int(TELEPHONY_SAMPLE_RATE * _HOLD_CHUNK_SECONDS) * 2
         started = self._clock()
         queued_seconds = 0.0
         next_phrase_at = self._limits.hold_phrase_interval_seconds
         position = 0
         while True:
-            if queued_seconds >= next_phrase_at:
-                next_phrase_at += self._limits.hold_phrase_interval_seconds
-                pcm = self._hold_phrase_audio()
+            key = None
+            if self._hold_reply_due:
+                self._hold_reply_due = False
+                key = "hold_still_here"
+            elif queued_seconds >= next_phrase_at:
+                key = "still_trying"
+            if key is not None:
+                # Any phrase restarts the interval, so two phrases never play back to back.
+                next_phrase_at = queued_seconds + self._limits.hold_phrase_interval_seconds
+                pcm = self._hold_phrase_audio(key)
                 if pcm:
                     await self._push_audio(pcm)
                     queued_seconds += len(pcm) / (2 * TELEPHONY_SAMPLE_RATE)
@@ -385,6 +429,11 @@ class AgentBrainService(FrameProcessor):
         turn_running = self._turn_task is not None and not self._turn_task.done()
         busy = self._bot_speaking or self._user_speaking or turn_running
         return not busy and self._clock() - self._last_activity >= self._limits.caller_idle_seconds
+
+    async def end_for_shutdown(self) -> None:
+        """The server is stopping: apologize, promise to pass everything on, say goodbye."""
+        if self.mode is not Mode.CLOSING:
+            await self._close_for_limit("server shutdown")
 
     async def _close_for_limit(self, reason: str) -> None:
         logger.info("Ending call: %s", reason)
@@ -439,6 +488,26 @@ class AgentBrainService(FrameProcessor):
     async def _cancel(self, task: asyncio.Task[None] | None) -> None:
         if task is not None and task is not asyncio.current_task() and not task.done():
             await self.cancel_task(task)
+
+
+class HoldListener(FrameProcessor):
+    """Sits between STT and the user aggregator. While the caller is on hold, transcripts go to
+    the hold manager (buffered, canned reply) instead of becoming model turns; the aggregator
+    would drop them anyway while the caller is muted."""
+
+    def __init__(self, agent: AgentBrainService, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._agent = agent
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
+        await super().process_frame(frame, direction)
+        if self._agent.on_hold and isinstance(
+            frame, TranscriptionFrame | InterimTranscriptionFrame
+        ):
+            if isinstance(frame, TranscriptionFrame):
+                self._agent.on_hold_utterance(frame.text)
+            return
+        await self.push_frame(frame, direction)
 
 
 def message_text(message: Any) -> str:

@@ -39,6 +39,8 @@ class AskOwnerResult(BaseModel):
     free_text_original: str | None = None
     # The owner did not answer within the hold time; the agent takes a message instead.
     timed_out: bool = False
+    # What the caller said while on hold (raw transcripts, untrusted).
+    caller_said_during_hold: list[str] = Field(default_factory=list)
 
 
 class SaveMessageInput(_ToolInput):

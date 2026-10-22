@@ -71,3 +71,25 @@ def say_twiml(text: str, language: str = "lt-LT") -> str:
         '<?xml version="1.0" encoding="UTF-8"?>'
         f"<Response><Say language={quoteattr(language)}>{escape(text)}</Say><Hangup/></Response>"
     )
+
+
+def reject_twiml() -> str:
+    """Decline without answering: the caller hears busy and nothing is billed for media."""
+    return '<?xml version="1.0" encoding="UTF-8"?><Response><Reject reason="busy"/></Response>'
+
+
+def hangup_twiml() -> str:
+    return '<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>'
+
+
+def dial_twiml(number: str, *, caller_id: str | None, timeout: int, action_url: str) -> str:
+    """Connect the caller to `number` (a second call leg: only for allowlisted callers).
+
+    Twilio posts the outcome to `action_url` when the dialed leg ends or is not answered.
+    """
+    caller_attr = f" callerId={quoteattr(caller_id)}" if caller_id else ""
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        f"<Response><Dial timeout={quoteattr(str(timeout))} action={quoteattr(action_url)}"
+        f' method="POST"{caller_attr}><Number>{escape(number)}</Number></Dial></Response>'
+    )

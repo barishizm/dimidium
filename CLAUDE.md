@@ -56,3 +56,6 @@ Items, in the order they usually come up:
 - lint: ruff check . && black --check .
 - local test call (no Twilio): python scripts/fake_twilio_call.py --say "..."
 - twilio setup check: python scripts/check_twilio.py [--set-webhook]
+- whole-setup check: python scripts/doctor.py [--offline] [--skip-speech]
+- production server (polite shutdown): python -m app.serve
+- container: docker compose up --build

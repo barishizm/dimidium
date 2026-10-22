@@ -32,3 +32,6 @@ data/
 .DS_Store
 .idea/
 .vscode/
+
+# Container secrets (docker-compose mounts ./secrets)
+secrets/

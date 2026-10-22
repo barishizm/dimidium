@@ -1,0 +1,34 @@
+# Local run in the production image:
+#   cp .env.example .env && cp rules.example.yaml rules.yaml   # fill in .env first
+#   docker compose up --build
+#   docker compose exec app python scripts/doctor.py
+#
+# Twilio still needs a public https URL (ngrok http 8000 -> PUBLIC_BASE_URL in .env).
+services:
+  app:
+    build:
+      context: .
+      args:
+        EXTRAS: google,azure
+    env_file: .env
+    environment:
+      # Paths inside the container (the values in .env are host paths).
+      DB_PATH: /srv/data/dimidium.db
+      PHRASE_CACHE_DIR: /srv/data/phrase_cache
+      RULES_PATH: /srv/rules.yaml
+      # Put the Google service-account key at ./secrets/google.json (git-ignored).
+      GOOGLE_APPLICATION_CREDENTIALS: /srv/secrets/google.json
+    # Fully non-root: the named volume inherits the image's /srv/data ownership (uid 10001).
+    user: "10001:10001"
+    ports:
+      - "8000:8000"
+    volumes:
+      - data:/srv/data
+      - ./rules.yaml:/srv/rules.yaml:ro
+      - ./secrets:/srv/secrets:ro
+    # SHUTDOWN_GRACE_SECONDS (20) for goodbyes + a few seconds for uvicorn.
+    stop_grace_period: 30s
+    restart: unless-stopped
+
+volumes:
+  data:

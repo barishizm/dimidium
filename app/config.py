@@ -9,6 +9,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 STTProviderName = Literal["google", "azure", "deepgram"]
 # Deepgram Aura has no Lithuanian voice, so Deepgram is STT-only.
 TTSProviderName = Literal["google", "azure", "elevenlabs"]
+# What callers get in "off" answer mode: the agent takes a voicemail, or Twilio rejects (busy).
+OffModeAction = Literal["voicemail", "reject"]
 
 
 class Settings(BaseSettings):
@@ -23,6 +25,12 @@ class Settings(BaseSettings):
     hold_timeout_seconds: float = Field(default=75, gt=0)
     owner_name: str = "the owner"
     rules_path: str = "rules.yaml"
+    # Transcripts older than this are deleted by a daily cleanup. Raw audio is never stored.
+    retention_days: int = Field(default=30, ge=1)
+    off_mode_action: OffModeAction = "voicemail"
+    # Your real phone number (E.164). Allowlisted callers can be forwarded here via <Dial>.
+    owner_forward_number: str | None = None
+    forward_ring_seconds: int = Field(default=20, ge=5, le=60)
 
     # Anthropic
     anthropic_api_key: SecretStr | None = None
@@ -32,6 +40,9 @@ class Settings(BaseSettings):
     anthropic_timeout_seconds: float = Field(default=20, gt=0)
     # Server-side refusal fallback ("default" routing). Disable if the configured model rejects it.
     anthropic_refusal_fallback: bool = True
+    # Post-call summary for the owner: a separate, cheap call after the phone call has ended.
+    summary_model: str = "claude-haiku-5-5"
+    summary_timeout_seconds: float = Field(default=30, gt=0)
 
     # Telegram
     telegram_bot_token: SecretStr | None = None
@@ -45,6 +56,20 @@ class Settings(BaseSettings):
     # local curl tests; Twilio always signs its webhooks.
     twilio_validate_signature: bool = True
 
+    # Server and abuse limits
+    port: int = Field(default=8000, gt=0)
+    # On SIGTERM, active calls get this long to hear the goodbye before connections close.
+    # Keep it below the platform's kill timeout (Fly kill_timeout, Render maxShutdownDelaySeconds).
+    shutdown_grace_seconds: float = Field(default=20, ge=0)
+    # Requests per minute to /twilio/voice from one IP, checked before the signature.
+    voice_requests_per_ip_per_minute: int = Field(default=60, gt=0)
+    # Calls one number may make within the window before getting a busy signal
+    # (allowlisted numbers are exempt).
+    calls_per_caller: int = Field(default=4, gt=0)
+    calls_per_caller_window_seconds: float = Field(default=600, gt=0)
+    # Calls answered at the same time; more ring busy.
+    max_concurrent_calls: int = Field(default=3, gt=0)
+
     # Call flow limits and timing
     max_call_seconds: float = Field(default=300, gt=0)
     max_caller_turns: int = Field(default=30, gt=0)
@@ -57,6 +82,10 @@ class Settings(BaseSettings):
     # Ask "are you still there?" after this much silence from the caller.
     caller_idle_seconds: float = Field(default=12, gt=0)
     hold_phrase_interval_seconds: float = Field(default=20, gt=0)
+    # Your own hold music: 8 kHz mono mu-law (.wav or raw .ulaw). Empty = generated music.
+    hold_audio_path: str | None = None
+    # ask_owner calls allowed per call; later ones are refused without asking.
+    max_owner_questions: int = Field(default=2, ge=1)
     # Turn detection: VAD silence before "stopped speaking", then the wait for more speech.
     vad_stop_secs: float = Field(default=0.3, gt=0)
     turn_speech_timeout: float = Field(default=0.5, ge=0)

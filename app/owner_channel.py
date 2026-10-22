@@ -16,7 +16,13 @@ from typing import Any, Protocol
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters.callback_data import CallbackData
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import (
+    BotCommand,
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+)
 from pydantic import Field, ValidationError
 
 from app.agent.tools import (
@@ -43,6 +49,17 @@ CHOICE_REJECT = "x"
 WRITE_LABEL = "✍️ Kendim yazarım"
 REJECT_LABEL = "❌ Reddet / Kapat"
 EXPIRED_TEXT = "⏱ Süre doldu"
+# The call ended while the owner was being asked (in practice: the caller hung up on hold).
+HUNG_UP_TEXT = "📵 Arayan kapattı"
+FORWARD_LABEL = "📲 Telefonuma bağla"
+# Telegram's command menu (descriptions in Turkish).
+BOT_COMMANDS = (
+    ("calls", "Son 10 arama ve özetleri"),
+    ("messages", "Okunmamış arayan mesajları"),
+    ("mode", "Cevaplama modu: herkes / kayıtlı / kapalı"),
+    ("rules", "Yüklü kurallar"),
+    ("status", "Durum"),
+)
 REJECT_MEANING_EN = (
     "The owner declines. Politely tell the caller the owner cannot help with this right now, "
     "offer to take a short message, then say goodbye and end the call."
@@ -70,6 +87,17 @@ class DecisionCallback(CallbackData, prefix="od"):
     call_sid: str = Field(pattern=r"^[A-Za-z0-9_-]{1,40}$")
     nonce: str = Field(pattern=r"^[0-9a-f]{6}$")
     choice: str = Field(pattern=rf"^([0-{MAX_OWNER_OPTIONS - 1}]|{CHOICE_WRITE}|{CHOICE_REJECT})$")
+
+
+class ForwardCallback(CallbackData, prefix="fw"):
+    """Button payload: forward this live call to the owner's real phone."""
+
+    call_sid: str = Field(pattern=r"^[A-Za-z0-9_-]{1,40}$")
+
+
+CommandHandler = Callable[[str], Awaitable[str]]
+# Forwards the call; returns a short Turkish outcome for the owner.
+ForwardHandler = Callable[[str], Awaitable[str]]
 
 
 class TelegramBot(Protocol):
@@ -171,6 +199,9 @@ class OwnerChannel:
         # (call_sid, nonce) -> short Turkish outcome label.
         self._finished: OrderedDict[tuple[str, str], str] = OrderedDict()
         self._free_text_target: _FreeTextTarget | None = None
+        # Set once the app is wired (they need the database, rules and Twilio).
+        self.on_command: CommandHandler | None = None
+        self.on_forward: ForwardHandler | None = None
 
     def is_owner(self, user_id: int | None, chat_id: int | None) -> bool:
         return user_id == self.owner_chat_id and chat_id == self.owner_chat_id
@@ -236,9 +267,7 @@ class OwnerChannel:
             # The call ended while on hold. Shielded, so the edit survives the cancellation.
             with suppress(Exception):
                 await asyncio.shield(
-                    self._settle(
-                        call_sid, OwnerDecision(DecisionKind.CANCELLED), "📴 Arama sona erdi"
-                    )
+                    self._settle(call_sid, OwnerDecision(DecisionKind.CANCELLED), HUNG_UP_TEXT)
                 )
             raise
 
@@ -312,6 +341,8 @@ class OwnerChannel:
         if not text:
             return None
         if text.startswith("/"):
+            if self.on_command is not None:
+                return await self.on_command(text)
             return "Jarvis bağlı. Bekleyen arama sayısı: " + str(len(self._pending))
 
         pending = self._free_text_recipient(reply_to_message_id)
@@ -329,9 +360,50 @@ class OwnerChannel:
         )
         return f"✅ İletildi (#{pending.short_id})."
 
-    async def send_info(self, text: str) -> bool:
-        """Send a plain message to the owner (summaries, alerts). Never raises."""
-        return await self._call_telegram(self._bot.send_message(self.owner_chat_id, text[:4000]))
+    async def send_info(self, text: str, *, silent: bool = False) -> bool:
+        """Send a plain message to the owner (summaries, alerts). Never raises.
+
+        `silent` delivers it without a sound (routine call reports).
+        """
+        return await self._call_telegram(
+            self._bot.send_message(self.owner_chat_id, text[:4000], disable_notification=silent)
+        )
+
+    async def send_ring_alert(self, call_sid: str, text: str, *, offer_forward: bool) -> bool:
+        """An allowlisted caller is ringing: alert now, optionally with a forward button."""
+        markup = None
+        if offer_forward:
+            data = ForwardCallback(call_sid=call_sid).pack()
+            markup = InlineKeyboardMarkup(
+                inline_keyboard=[[InlineKeyboardButton(text=FORWARD_LABEL, callback_data=data)]]
+            )
+        return await self._call_telegram(
+            self._bot.send_message(self.owner_chat_id, text[:4000], reply_markup=markup)
+        )
+
+    async def handle_forward(
+        self, user_id: int | None, chat_id: int | None, data: str, message_id: int | None
+    ) -> str | None:
+        """The owner pressed "forward to my phone". Returns the toast text."""
+        if not self.is_owner(user_id, chat_id):
+            logger.warning("Ignored forward callback from a non-owner chat")
+            return None
+        try:
+            parsed = ForwardCallback.unpack(data)
+        except (TypeError, ValueError, ValidationError):
+            return "Geçersiz düğme."
+        if message_id is not None:
+            # One press only: drop the button whatever happens next.
+            await self._call_telegram(
+                self._bot.edit_message_reply_markup(
+                    chat_id=self.owner_chat_id, message_id=message_id, reply_markup=None
+                )
+            )
+        if self.on_forward is None:
+            return "Yönlendirme ayarlı değil."
+        outcome = await self.on_forward(parsed.call_sid)
+        await self.send_info(outcome)
+        return outcome[:190]
 
     def _free_text_recipient(self, reply_to_message_id: int | None) -> PendingDecision | None:
         if reply_to_message_id is not None:
@@ -411,6 +483,18 @@ def build_router(channel: OwnerChannel) -> Router:
     router.message.filter(F.chat.id == owner, F.from_user.id == owner)
     router.callback_query.filter(F.from_user.id == owner)
 
+    @router.callback_query(ForwardCallback.filter())
+    async def on_forward(query: CallbackQuery) -> None:
+        message = query.message
+        answer = await channel.handle_forward(
+            query.from_user.id,
+            message.chat.id if message else None,
+            query.data or "",
+            message.message_id if message else None,
+        )
+        if answer is not None:
+            await query.answer(answer)
+
     @router.callback_query()
     async def on_callback(query: CallbackQuery) -> None:
         message = query.message
@@ -465,6 +549,16 @@ async def start_telegram(settings: Settings) -> TelegramRuntime | None:
     channel = OwnerChannel(bot, settings.telegram_owner_chat_id)
     dispatcher = Dispatcher()
     dispatcher.include_router(build_router(channel))
+    try:
+        await asyncio.wait_for(
+            bot.set_my_commands(
+                [BotCommand(command=name, description=desc) for name, desc in BOT_COMMANDS]
+            ),
+            TELEGRAM_TIMEOUT_SECONDS,
+        )
+    except Exception:
+        # Only the menu is missing; typed commands still work.
+        logger.warning("Could not register the Telegram command menu", exc_info=True)
     task = asyncio.create_task(
         dispatcher.start_polling(
             bot,

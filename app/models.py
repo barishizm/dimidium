@@ -35,3 +35,7 @@ class CallSession:
     ended_at: datetime | None = None
     # One-time secret handed to Twilio in the TwiML; the media stream must present it.
     stream_token: str | None = None
+    # Voicemail: the owner is not asked; the agent only takes a message.
+    message_only: bool = False
+    # False in "off" mode: everything is stored for /calls and /messages, nothing is pushed.
+    notify_owner: bool = True

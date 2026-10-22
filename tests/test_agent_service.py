@@ -13,6 +13,7 @@ from pipecat.frames.frames import (
     LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
     OutputAudioRawFrame,
+    TranscriptionFrame,
     TTSSpeakFrame,
 )
 from pipecat.processors.aggregators.llm_context import LLMContext
@@ -21,8 +22,17 @@ from pipecat.tests.utils import SleepFrame, run_test
 from app.agent.brain import FALLBACK_PHRASE_LT
 from app.config import Settings
 from app.models import CallSession
-from app.telephony.agent_service import WRAP_UP_EVENT, AgentBrainService, CallLimits, Mode, phrase
+from app.telephony.agent_service import (
+    WRAP_UP_EVENT,
+    AgentBrainService,
+    CallLimits,
+    HoldListener,
+    Mode,
+    phrase,
+)
 
+# Distinct sample values per phrase, so tests can tell which one played.
+HOLD_AUDIO = {"still_trying": b"\x01\x00" * 800, "hold_still_here": b"\x02\x00" * 800}
 FAIL = object()
 END = object()
 Step = str | float | object | Callable[[], Any]
@@ -74,7 +84,7 @@ def make_agent(brain: ScriptedBrain, **limits: Any) -> tuple[AgentBrainService, 
     agent = AgentBrainService(
         session=session,
         limits=CallLimits(settings),
-        hold_phrase_audio=lambda: b"\x00\x00" * 800,
+        hold_phrase_audio=lambda key: HOLD_AUDIO[key],
         persist=persist,
     )
     agent.attach(brain)  # type: ignore[arg-type]
@@ -252,6 +262,25 @@ async def test_call_length_cap() -> None:
     assert any(isinstance(f, EndWorkerFrame) for f in frames)
 
 
+async def test_server_shutdown_says_goodbye_and_keeps_a_note() -> None:
+    brain = ScriptedBrain()
+    agent, session = make_agent(brain)
+
+    async def shut_down_soon() -> None:
+        await asyncio.sleep(0.3)
+        await agent.end_for_shutdown()
+        await agent.end_for_shutdown()  # a second SIGTERM changes nothing
+
+    task = asyncio.create_task(shut_down_soon())
+    frames = await run(agent, SleepFrame(sleep=1.0))
+    await task
+    assert spoken(frames)[-2:] == [phrase("time_limit"), phrase("goodbye")]
+    assert spoken(frames).count(phrase("goodbye")) == 1
+    assert any(isinstance(f, EndWorkerFrame) for f in frames)
+    assert agent.end_reason == "server shutdown"
+    assert agent.owner_notes and "server shutdown" in agent.owner_notes[0][0]
+
+
 async def test_silent_caller_is_prompted_then_call_ends() -> None:
     brain = ScriptedBrain()
     agent, _ = make_agent(brain, caller_idle_seconds=0.2)
@@ -294,3 +323,45 @@ async def test_stt_failure_ends_call_and_alerts_owner() -> None:
     assert spoken(frames)[-2:] == [phrase("cant_hear"), phrase("goodbye")]
     assert agent.owner_alerts
     assert any(isinstance(f, EndWorkerFrame) for f in frames)
+
+
+async def test_caller_speech_on_hold_is_buffered_and_answered_once() -> None:
+    agent_ref: list[AgentBrainService] = []
+    heard_lists: list[list[str]] = []
+
+    async def hold() -> None:
+        async with agent_ref[0].hold() as heard:
+            agent_ref[0].on_hold_utterance("Alio?")
+            agent_ref[0].on_hold_utterance("Ar jūs ten?")  # within the reply gap: no 2nd reply
+            await asyncio.sleep(0.3)
+        heard_lists.append(heard)
+
+    brain = ScriptedBrain([hold, "Grįžau."])
+    agent, session = make_agent(brain)
+    agent_ref.append(agent)
+    frames = await run(agent, caller("Siuntinys"), SleepFrame(sleep=0.5))
+    assert heard_lists == [["Alio?", "Ar jūs ten?"]]
+    audio = [f.audio for f in frames if isinstance(f, OutputAudioRawFrame)]
+    assert audio.count(HOLD_AUDIO["hold_still_here"]) == 1
+    assert [t.text for t in session.transcript if t.speaker == "caller"] == [
+        "Alio?",
+        "Ar jūs ten?",
+    ]
+    assert spoken(frames)[-1] == "Grįžau."
+    assert len(brain.inputs) == 1  # the hold speech never became a model turn
+
+
+async def test_hold_listener_diverts_transcripts_only_on_hold() -> None:
+    brain = ScriptedBrain()
+    agent, _ = make_agent(brain)
+    listener = HoldListener(agent)
+    frame = TranscriptionFrame("Alio?", "caller", "2026-01-01T00:00:00Z")
+
+    agent.on_hold = True
+    down, _ = await run_test(listener, frames_to_send=[frame], expected_down_frames=None)
+    assert not any(isinstance(f, TranscriptionFrame) for f in down)
+    assert agent._hold_heard == ["Alio?"]
+
+    agent.on_hold = False
+    down, _ = await run_test(listener, frames_to_send=[frame], expected_down_frames=None)
+    assert any(isinstance(f, TranscriptionFrame) for f in down)

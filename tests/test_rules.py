@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from app.rules import ContactAction, RulesConfig, RulesEngine, normalize_number
+from app.rules import AllowedContact, ContactAction, RulesConfig, RulesEngine, normalize_number
 
 EXAMPLE = Path(__file__).resolve().parents[1] / "rules.example.yaml"
 
@@ -123,3 +123,30 @@ def test_example_rules_file_is_valid() -> None:
     engine = RulesEngine.from_yaml(EXAMPLE)
     assert {r.name for r in engine.config.keyword_rules} >= {"courier", "sales"}
     assert [r.name for r in engine.match_keywords("esu kurjeris iš DPD")] == ["courier"]
+
+
+def test_allow_and_deny_lists() -> None:
+    engine = RulesEngine(
+        RulesConfig.model_validate(
+            {
+                "known_numbers": [{"number": "+37060000001", "name": "Old entry"}],
+                "do_not_answer": {
+                    "allow": [{"number": "860000001", "name": "Agate", "offer_forward": True}],
+                    "deny": [{"number": "+37060000009"}, {"number": "+37060000001"}],
+                },
+            }
+        )
+    )
+    agate = engine.allowed("+37060000001")
+    assert isinstance(agate, AllowedContact) and agate.alert_text == "Agate arıyor"
+    # The allowlist entry wins over known_numbers and over the denylist.
+    assert engine.match_number("+37060000001") is agate
+    assert not engine.is_blocked("+37060000001")
+    assert engine.is_blocked("8 600 00009")
+    assert engine.allowed("+37060000009") is None
+    assert not engine.is_blocked(None)
+
+
+def test_deny_entry_needs_a_phone_number() -> None:
+    with pytest.raises(ValidationError):
+        RulesConfig.model_validate({"do_not_answer": {"deny": [{"number": "abc"}]}})

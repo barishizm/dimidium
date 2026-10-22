@@ -218,7 +218,7 @@ async def test_ask_cancelled_when_call_ends(bot: FakeBot) -> None:
     with pytest.raises(asyncio.CancelledError):
         await task
     assert channel.pending_call_sids == []
-    assert "sona erdi" in bot.edits[0]["text"]
+    assert "Arayan kapattı" in bot.edits[0]["text"]
 
 
 async def test_unknown_request_click_removes_buttons(channel: OwnerChannel, bot: FakeBot) -> None:
@@ -345,3 +345,60 @@ async def test_router_drops_updates_from_strangers() -> None:
     finally:
         await bot.session.close()
     assert spy.seen == ["text"]
+
+
+# --- commands, silent reports, ring alerts with forwarding --------------------------------
+
+
+async def test_commands_are_routed_to_the_handler(channel: OwnerChannel) -> None:
+    seen: list[str] = []
+
+    async def on_command(text: str) -> str:
+        seen.append(text)
+        return "ok"
+
+    assert await channel.handle_text(OWNER, OWNER, "/calls")  # default status reply
+    channel.on_command = on_command
+    assert await channel.handle_text(OWNER, OWNER, "/mode off") == "ok"
+    assert await channel.handle_text(STRANGER, STRANGER, "/mode off") is None
+    assert seen == ["/mode off"]
+
+
+async def test_send_info_can_be_silent(channel: OwnerChannel, bot: FakeBot) -> None:
+    await channel.send_info("routine", silent=True)
+    await channel.send_info("important")
+    assert [m["disable_notification"] for m in bot.sent] == [True, False]
+
+
+async def test_ring_alert_forward_button(channel: OwnerChannel, bot: FakeBot) -> None:
+    from app.owner_channel import FORWARD_LABEL, ForwardCallback
+
+    forwarded: list[str] = []
+
+    async def on_forward(call_sid: str) -> str:
+        forwarded.append(call_sid)
+        return "📲 Arama telefonuna yönlendiriliyor."
+
+    await channel.send_ring_alert(CALL_A, "📞 Agate arıyor", offer_forward=True)
+    [alert] = bot.sent
+    [[button]] = alert["reply_markup"].inline_keyboard
+    assert button.text == FORWARD_LABEL
+    assert ForwardCallback.unpack(button.callback_data).call_sid == CALL_A
+
+    assert await channel.handle_forward(STRANGER, STRANGER, button.callback_data, 1) is None
+    assert "ayarlı değil" in (
+        await channel.handle_forward(OWNER, OWNER, button.callback_data, 1) or ""
+    )
+    channel.on_forward = on_forward
+    toast = await channel.handle_forward(OWNER, OWNER, button.callback_data, alert["message_id"])
+    assert toast and "yönlendiriliyor" in toast
+    assert forwarded == [CALL_A]
+    assert bot.edits[-1]["reply_markup"] is None
+    assert await channel.handle_forward(OWNER, OWNER, "fw:bad id!", 1) == "Geçersiz düğme."
+
+
+async def test_ring_alert_without_forward_has_no_buttons(
+    channel: OwnerChannel, bot: FakeBot
+) -> None:
+    await channel.send_ring_alert(CALL_A, "📞 Mom arıyor", offer_forward=False)
+    assert bot.sent[0]["reply_markup"] is None

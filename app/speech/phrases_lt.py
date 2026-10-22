@@ -25,6 +25,17 @@ PHRASES: tuple[Phrase, ...] = (
         "Good afternoon! An artificial intelligence assistant is answering because the phone's "
         "owner cannot talk right now. The call is recorded and transcribed. How can I help?",
     ),
+    # Voicemail mode (answer mode "off" / unknown caller in "known numbers only"): the owner is
+    # not asked, the agent only takes a message.
+    Phrase(
+        "greeting_voicemail",
+        "Laba diena! Atsiliepia dirbtinio intelekto asistentas. Telefono savininkas šiuo metu "
+        "neatsiliepia. Pokalbis įrašomas ir transkribuojamas. Prašau pasakyti savo vardą ir "
+        "kokiu reikalu skambinate, aš perduosiu jūsų žinutę.",
+        "Good afternoon! An artificial intelligence assistant is answering. The phone's owner "
+        "is not taking calls right now. The call is recorded and transcribed. Please tell me "
+        "your name and what you are calling about, and I will pass on your message.",
+    ),
     Phrase(
         "ask_name_reason",
         "Ar galėtumėte pasakyti savo vardą ir kokiu reikalu skambinate?",
@@ -37,8 +48,13 @@ PHRASES: tuple[Phrase, ...] = (
     ),
     Phrase(
         "still_trying",
-        "Vis dar bandau su juo susisiekti, prašau dar šiek tiek palaukti.",
-        "I am still trying to reach him, please wait a little longer.",
+        "Vis dar bandau su juo susisiekti. Ačiū, kad laukiate.",
+        "I am still trying to reach him. Thank you for waiting.",
+    ),
+    Phrase(
+        "hold_still_here",
+        "Taip, aš čia. Vis dar laukiu atsakymo, prašau nepadėti ragelio.",
+        "Yes, I am here. I am still waiting for an answer, please do not hang up.",
     ),
     Phrase(
         "unavailable_take_message",

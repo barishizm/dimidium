@@ -21,18 +21,47 @@ class _Rule(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+def _check_number(value: str) -> str:
+    if len(normalize_number(value)) < 6:
+        raise ValueError(f"not a phone number: {value!r}")
+    return value
+
+
 class KnownContact(_Rule):
     number: str
     name: str
     relation: str = "known"
     action: ContactAction = ContactAction.NOTIFY_IMMEDIATELY
 
-    @field_validator("number")
-    @classmethod
-    def _valid_number(cls, value: str) -> str:
-        if len(normalize_number(value)) < 6:
-            raise ValueError(f"not a phone number: {value!r}")
-        return value
+    _valid_number = field_validator("number")(_check_number)
+
+
+class AllowedContact(KnownContact):
+    """Do-not-answer exception: always gets through (whatever the answer mode) and the owner is
+    alerted the moment the phone rings."""
+
+    # Turkish Telegram alert sent on ring, e.g. "Agate arıyor". Default: "<name> arıyor".
+    alert_tr: str | None = None
+    # Offer the owner a button that forwards the live call to OWNER_FORWARD_NUMBER.
+    offer_forward: bool = False
+
+    @property
+    def alert_text(self) -> str:
+        return self.alert_tr or f"{self.name} arıyor"
+
+
+class BlockedNumber(_Rule):
+    """Rejected before the agent answers (busy signal, no AI cost, no notification)."""
+
+    number: str
+    note: str = ""
+
+    _valid_number = field_validator("number")(_check_number)
+
+
+class DoNotAnswerLists(_Rule):
+    allow: list[AllowedContact] = Field(default_factory=list)
+    deny: list[BlockedNumber] = Field(default_factory=list)
 
 
 class KeywordRule(_Rule):
@@ -46,6 +75,7 @@ class KeywordRule(_Rule):
 class RulesConfig(_Rule):
     known_numbers: list[KnownContact] = Field(default_factory=list)
     keyword_rules: list[KeywordRule] = Field(default_factory=list)
+    do_not_answer: DoNotAnswerLists = Field(default_factory=DoNotAnswerLists)
     unknown_caller_guidance: str = (
         "Unknown caller: screen the call, gather details, then ask the owner."
     )
@@ -64,7 +94,12 @@ def normalize_number(number: str) -> str:
 class RulesEngine:
     def __init__(self, config: RulesConfig) -> None:
         self.config = config
-        self._by_number = {normalize_number(c.number): c for c in config.known_numbers}
+        self._by_number: dict[str, KnownContact] = {
+            normalize_number(c.number): c for c in config.known_numbers
+        }
+        # Allowlist entries are known contacts too, and win over a duplicate known_numbers entry.
+        self._by_number.update({normalize_number(c.number): c for c in config.do_not_answer.allow})
+        self._blocked = {normalize_number(b.number) for b in config.do_not_answer.deny}
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "RulesEngine":
@@ -79,6 +114,16 @@ class RulesEngine:
         if not caller_number:
             return None
         return self._by_number.get(normalize_number(caller_number))
+
+    def allowed(self, caller_number: str | None) -> AllowedContact | None:
+        contact = self.match_number(caller_number)
+        return contact if isinstance(contact, AllowedContact) else None
+
+    def is_blocked(self, caller_number: str | None) -> bool:
+        """Denylisted. An allowlist entry for the same number wins."""
+        if not caller_number or self.allowed(caller_number) is not None:
+            return False
+        return normalize_number(caller_number) in self._blocked
 
     def match_keywords(self, text: str) -> list[KeywordRule]:
         lowered = text.casefold()

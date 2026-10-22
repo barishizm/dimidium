@@ -9,11 +9,17 @@ import pytest
 from app.config import Settings
 from app.db import init_db
 from app.models import CallSession, CallStatus, TranscriptTurn
-from app.speech.audio import mulaw_to_pcm16
+from app.speech.audio import mulaw_to_pcm16, pcm16_to_mulaw
 from app.speech.base import SpeechError, TTSProvider, VoiceConfig
 from app.telephony.agent_service import message_text
 from app.telephony.call_handlers import CallRecorder
-from app.telephony.hold_audio import hold_music_pcm
+from app.telephony.hold_audio import (
+    HoldAudioError,
+    decode_hold_file,
+    hold_music_pcm,
+    load_hold_music,
+    mulaw_wav_bytes,
+)
 from app.telephony.latency import TurnLatencyTracker
 from app.telephony.phrase_cache import PhraseCache, normalize_phrase
 from app.telephony.speech_services import to_language, with_timeouts
@@ -92,6 +98,40 @@ def test_hold_music_is_a_quiet_eight_second_loop() -> None:
     assert len(samples) == 8 * 8000
     assert 0.05 * 32767 < np.abs(samples).max() <= 0.13 * 32767
     assert abs(int(samples[0])) < 200 and abs(int(samples[-1])) < 200  # no click at the loop
+
+
+def _loud_mulaw(seconds: float = 2.0) -> bytes:
+    t = np.arange(int(8000 * seconds)) / 8000
+    pcm = (0.9 * np.sin(2 * np.pi * 440 * t) * 32767).astype("<i2").tobytes()
+    return pcm16_to_mulaw(pcm)
+
+
+def test_custom_hold_file_mulaw_wav_and_raw_are_attenuated() -> None:
+    mulaw = _loud_mulaw()
+    for data, raw in ((mulaw_wav_bytes(mulaw), False), (mulaw, True)):
+        samples = np.frombuffer(decode_hold_file(data, raw=raw), dtype="<i2")
+        assert len(samples) == 2 * 8000
+        assert np.abs(samples).max() <= 0.13 * 32767  # never louder than the generated music
+
+
+def test_custom_hold_file_must_be_8khz_mono_and_long_enough() -> None:
+    wrong_rate = bytearray(mulaw_wav_bytes(_loud_mulaw()))
+    wrong_rate[24:28] = (16000).to_bytes(4, "little")
+    with pytest.raises(HoldAudioError, match="8000 Hz"):
+        decode_hold_file(bytes(wrong_rate))
+    with pytest.raises(HoldAudioError, match="shorter"):
+        decode_hold_file(_loud_mulaw(0.5), raw=True)
+
+
+def test_unusable_hold_file_falls_back_to_generated(tmp_path: Path) -> None:
+    bad = tmp_path / "bad.wav"
+    bad.write_bytes(b"not audio")
+    assert load_hold_music(str(bad)) == hold_music_pcm()
+    assert load_hold_music(str(tmp_path / "missing.ulaw")) == hold_music_pcm()
+    assert load_hold_music(None) == hold_music_pcm()
+    good = tmp_path / "good.wav"
+    good.write_bytes(mulaw_wav_bytes(_loud_mulaw()))
+    assert len(load_hold_music(str(good))) == 2 * 8000 * 2
 
 
 # --- latency -----------------------------------------------------------------------------

@@ -1,6 +1,12 @@
 # Copy to rules.yaml (git-ignored) and edit. Phone numbers in E.164 (+370...) or national format.
 #
-# action values:
+# do_not_answer: exceptions that apply before the agent and before the /mode switch.
+#   allow  always screened (even in "off" mode); you get a Telegram alert the moment they ring
+#          (alert_tr, default "<name> arıyor"). offer_forward: true adds a button that forwards
+#          the live call to OWNER_FORWARD_NUMBER (a second call leg, the one exception).
+#   deny   rejected with a busy signal: no agent, no AI cost, no notification.
+#
+# action values (known_numbers):
 #   notify_immediately  trusted contact: do not screen, ask the owner right away
 #   screen              gather details, then ask the owner (default for keyword rules)
 #   polite_reject       decline politely without asking the owner
@@ -14,6 +20,17 @@ known_numbers:
     name: "Mom"
     relation: family
     action: notify_immediately
+
+do_not_answer:
+  allow:
+    - number: "+37060000003"
+      name: "Agate"
+      relation: partner
+      alert_tr: "Agate arıyor"
+      offer_forward: true
+  deny:
+    - number: "+37060000099"
+      note: "telemarketing"
 
 keyword_rules:
   - name: courier
