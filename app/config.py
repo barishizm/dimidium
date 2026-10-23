@@ -11,6 +11,9 @@ STTProviderName = Literal["google", "azure", "deepgram"]
 TTSProviderName = Literal["google", "azure", "elevenlabs"]
 # What callers get in "off" answer mode: the agent takes a voicemail, or Twilio rejects (busy).
 OffModeAction = Literal["voicemail", "reject"]
+# Values accepted by delegation.responses in the openai SDK; the backend model may support fewer.
+LiveReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh"]
+LiveServiceTier = Literal["auto", "default", "flex", "priority"]
 
 
 class Settings(BaseSettings):
@@ -46,6 +49,33 @@ class Settings(BaseSettings):
     # Post-call summary for the owner: a separate, cheap call after the phone call has ended.
     summary_model: str = "claude-haiku-5-5"
     summary_timeout_seconds: float = Field(default=30, gt=0)
+
+    # OpenAI GPT-Live (voice) with Responses delegation (backend)
+    openai_api_key: SecretStr | None = None
+    live_voice_model: str = "gpt-live-1"
+    live_backend_model: str = "gpt-6-luna"
+    live_backend_reasoning_effort: LiveReasoningEffort = "low"
+    # Unset follows the project's default tier; "priority" is Fast mode where available.
+    live_backend_service_tier: LiveServiceTier | None = None
+    live_voice: str = "marin"
+    # Lithuanian opening line (AI disclosure + recording notice). Empty = the reviewed default
+    # from app/speech/phrases_lt.py.
+    live_greeting: str | None = None
+    # Signing secret of the project webhook (whsec_...) that receives live.transport.incoming.
+    # Without it every incoming-call webhook is refused.
+    openai_webhook_secret: SecretStr | None = None
+    # proj_... ID; only used by setup checks (the SIP URI is sip:<project id>@sip.api.openai.com).
+    openai_project_id: str | None = None
+    # Timeout for accept / reject / hangup requests.
+    live_control_timeout_seconds: float = Field(default=10, gt=0)
+    # The disclosure must appear in the agent's speech within this time, else it is re-sent.
+    live_disclosure_deadline_seconds: float = Field(default=10, gt=0)
+    # After end_call: hang up once the agent has been quiet this long (the goodbye finished),
+    # and at the latest after live_goodbye_max_seconds.
+    live_goodbye_quiet_seconds: float = Field(default=1.5, gt=0)
+    live_goodbye_max_seconds: float = Field(default=10, gt=0)
+    # After a backend or sideband failure the caller gets this long to leave a message.
+    live_fallback_grace_seconds: float = Field(default=30, gt=0)
 
     # Telegram
     telegram_bot_token: SecretStr | None = None
@@ -146,6 +176,8 @@ class Settings(BaseSettings):
         """Every configured secret, so logging can mask them wherever they appear."""
         secrets = [
             self.anthropic_api_key,
+            self.openai_api_key,
+            self.openai_webhook_secret,
             self.telegram_bot_token,
             self.twilio_auth_token,
             self.azure_speech_key,

@@ -12,6 +12,8 @@ from fastapi.responses import JSONResponse
 from app.answer_mode import AnswerModeStore
 from app.config import Settings, get_settings
 from app.db import init_db
+from app.live.webhook import create_live_deps
+from app.live.webhook import router as live_router
 from app.logging_setup import setup_logging, setup_pipecat_logging
 from app.owner_channel import start_telegram
 from app.owner_commands import OwnerCommands
@@ -81,9 +83,18 @@ def status_lines(deps: TelephonyDeps) -> list[str]:
         f"Konuşma (STT/TTS): {'⚠️ ' + deps.speech_problem if deps.speech_problem else 'hazır'}",
         f"Özet modeli: {summary_model}",
         f"Yönlendirme: {deps.forwarder.problem or 'hazır'}",
+        f"GPT-Live (SIP): {live_status(deps.settings)}",
         f"Transkript saklama: {deps.settings.retention_days} gün",
     ]
     return lines
+
+
+def live_status(settings: Settings) -> str:
+    if settings.openai_api_key is None:
+        return "kapalı (OPENAI_API_KEY yok)"
+    if settings.openai_webhook_secret is None:
+        return "⚠️ OPENAI_WEBHOOK_SECRET yok"
+    return "hazır"
 
 
 @asynccontextmanager
@@ -115,6 +126,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         ),
     )
     app.state.telephony = deps
+    # GPT-Live SIP path: shares screening state, the owner channel and shutdown with Twilio.
+    app.state.live = create_live_deps(
+        settings,
+        deps,
+        rules=deps.rules,
+        modes=deps.modes,
+        owner_channel=app.state.owner_channel,
+        summarizer=deps.summarizer,
+        caller_limiter=deps.caller_limiter,
+    )
     if telegram is not None:
         commands = OwnerCommands(
             db_path=settings.db_path,
@@ -149,6 +170,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="dimidium", lifespan=lifespan)
 app.include_router(twilio_router)
+app.include_router(live_router)
 
 
 @app.get("/health")

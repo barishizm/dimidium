@@ -41,3 +41,6 @@ class CallSession:
     notify_owner: bool = True
     # Only allowlisted callers whose ring alert offered "forward to my phone" may be forwarded.
     forward_allowed: bool = False
+    # GPT-Live SIP calls: the live_... session ID used for call control and the sideband.
+    # call_sid stays our own short ID (it goes into Telegram callback data, max 64 bytes).
+    live_session_id: str | None = None

@@ -36,6 +36,14 @@ PHRASES: tuple[Phrase, ...] = (
         "is not taking calls right now. The call is recorded and transcribed. Please tell me "
         "your name and what you are calling about, and I will pass on your message.",
     ),
+    # GPT-Live: re-sent when the AI + recording disclosure is missing from the agent's speech.
+    Phrase(
+        "disclosure",
+        "Noriu informuoti, kad su jumis kalba dirbtinio intelekto asistentas, o pokalbis "
+        "įrašomas ir transkribuojamas.",
+        "I would like to let you know that you are talking to an artificial intelligence "
+        "assistant, and the call is recorded and transcribed.",
+    ),
     Phrase(
         "ask_name_reason",
         "Ar galėtumėte pasakyti savo vardą ir kokiu reikalu skambinate?",
