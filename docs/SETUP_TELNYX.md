@@ -49,8 +49,14 @@ at once.
 ## 2. Buy the Lithuanian number
 
 1. Mission Control → **Numbers → Buy Numbers**.
-2. **Country**: Lithuania. **Features**: tick **Voice**. Number type: local or mobile, whichever
-   Telnyx offers for Lithuania. Press **Search**.
+2. **Country**: Lithuania. **Features**: tick **Voice only**; leave SMS/MMS **unticked**.
+   Telnyx's Lithuanian stock is voice-only (checked through its API on 2026-10-24: local
+   numbers with area codes 37, 31, 46 and 34, and mobile numbers starting 66; none with SMS),
+   so a search that also requires SMS finds nothing and the portal says it has "no search
+   coverage" for the country. Number type: local or mobile. Press **Search**.
+   If a voice-only search still finds nothing, the account is probably not upgraded yet
+   (Telnyx refuses some requests with "not permitted at this account level, refer to
+   telnyx.com/upgrade"): finish identity verification and add funds first (step 1).
 3. Pick a number and add it to the cart, then check out.
 4. **Document verification.** Lithuanian numbers need regulatory documents. Telnyx shows the exact
    list and upload form for the number type you picked (typically proof of identity and
