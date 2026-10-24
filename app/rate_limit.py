@@ -1,4 +1,6 @@
-"""In-memory sliding-window rate limiter (one process, so no shared store is needed)."""
+"""In-memory sliding-window rate limiter (one process, so no shared store is needed).
+
+Used for repeat callers (per number) and for the OpenAI webhook (per IP and global)."""
 
 import time
 from collections import deque

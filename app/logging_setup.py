@@ -17,6 +17,8 @@ _KEEP_SUFFIX = 2
 _SECRET_RE = re.compile(
     r"\b\d{6,12}:[A-Za-z0-9_-]{30,}\b"  # Telegram bot token
     r"|\bsk-ant-[A-Za-z0-9_-]{10,}"  # Anthropic API key
+    r"|\bsk-(?:proj-|svcacct-|admin-)?[A-Za-z0-9_-]{20,}"  # OpenAI API key
+    r"|\bwhsec_[A-Za-z0-9+/=]{10,}"  # webhook signing secret
     r"|(?<=Bearer )[A-Za-z0-9._~+/=-]{10,}"
     r"|(?<=bot)\d{6,12}:[A-Za-z0-9_-]{30,}"  # token inside a Telegram API URL
 )

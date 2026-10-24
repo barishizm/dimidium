@@ -81,8 +81,9 @@ Security, all on by default:
 
 - Webhooks without a valid OpenAI signature (`OPENAI_WEBHOOK_SECRET`, 5-minute tolerance) are
   rejected before anything else; re-deliveries are ignored.
-- Rate limits: at most `CALLS_PER_CALLER` calls per number within
-  `CALLS_PER_CALLER_WINDOW_SECONDS` (busy;
+- Rate limits: `WEBHOOK_REQUESTS_PER_IP_PER_MINUTE` per IP and `WEBHOOK_REQUESTS_PER_MINUTE`
+  in total on `/openai/webhook` (HTTP 429, before the signature check), at most
+  `CALLS_PER_CALLER` calls per number within `CALLS_PER_CALLER_WINDOW_SECONDS` (busy;
   numbers in `do_not_answer.allow` are exempt), and `MAX_CONCURRENT_CALLS` at once (busy).
   Callers with a hidden number share one limit.
 

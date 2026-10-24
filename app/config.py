@@ -88,6 +88,10 @@ class Settings(BaseSettings):
     # On SIGTERM, active calls get this long to hear the goodbye before connections close.
     # Keep it below the platform's kill timeout (Fly kill_timeout, Render maxShutdownDelaySeconds).
     shutdown_grace_seconds: float = Field(default=20, ge=0)
+    # POST /openai/webhook requests per minute from one client IP, and from everyone together.
+    # Checked before the signature (cheap), so a flood never reaches the HMAC or the screening.
+    webhook_requests_per_ip_per_minute: int = Field(default=60, gt=0)
+    webhook_requests_per_minute: int = Field(default=300, gt=0)
     # Calls one number may make within the window before getting a busy signal
     # (allowlisted numbers are exempt).
     calls_per_caller: int = Field(default=4, gt=0)

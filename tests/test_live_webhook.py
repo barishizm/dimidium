@@ -178,6 +178,43 @@ def test_invalid_signatures_are_rejected(
     assert host.spawned == []
 
 
+def test_webhook_flood_is_limited_before_the_signature_check(
+    route: tuple[TestClient, LiveDeps, SpawnRecorder],
+) -> None:
+    client, deps, host = route
+    deps.ip_limiter = SlidingWindowLimiter(2, 60)
+    deps.global_limiter = SlidingWindowLimiter(4, 60)
+    body = incoming()
+    # Unsigned junk counts too: the limit is checked first, so a flood costs no HMAC.
+    codes = [
+        client.post("/openai/webhook", content=b"x", headers={"x-forwarded-for": "1.1.1.1"})
+        for _ in range(3)
+    ]
+    assert [c.status_code for c in codes] == [400, 400, 429]
+    # Another sender is limited only by the global cap.
+    other = {"x-forwarded-for": "2.2.2.2", **sign(body)}
+    assert client.post("/openai/webhook", content=body, headers=other).status_code == 200
+    assert client.post("/openai/webhook", content=body, headers=other).status_code == 429
+    assert len(host.spawned) == 1
+
+
+def test_client_ip_cannot_be_spoofed_with_a_leading_forwarded_entry() -> None:
+    from starlette.requests import Request
+
+    from app.live.webhook import client_ip
+
+    def request(headers: dict[str, str]) -> Request:
+        raw = [(k.encode(), v.encode()) for k, v in headers.items()]
+        return Request({"type": "http", "headers": raw, "client": ("10.0.0.1", 1)})
+
+    # The sender wrote "6.6.6.6"; the platform proxy appended the real address.
+    assert client_ip(request({"x-forwarded-for": "6.6.6.6, 203.0.113.9"})) == "203.0.113.9"
+    assert client_ip(request({"fly-client-ip": "198.51.100.4", "x-forwarded-for": "6.6.6.6"})) == (
+        "198.51.100.4"
+    )
+    assert client_ip(request({})) == "10.0.0.1"
+
+
 def test_webhook_without_secret_is_refused(
     route: tuple[TestClient, LiveDeps, SpawnRecorder],
 ) -> None:

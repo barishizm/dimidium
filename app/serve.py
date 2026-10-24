@@ -37,8 +37,9 @@ def main() -> None:
         app,
         host="0.0.0.0",
         port=settings.port,
-        # Fly/Render terminate TLS and set X-Forwarded-For; the per-IP rate limit needs the
-        # real client address.
+        # Fly/Render terminate TLS and set X-Forwarded-For. Trusting every hop makes
+        # request.client the left-most, sender-written entry, so the webhook rate limit reads
+        # the headers itself (app.live.webhook.client_ip).
         proxy_headers=True,
         forwarded_allow_ips="*",
         timeout_graceful_shutdown=_UVICORN_GRACE_SECONDS,

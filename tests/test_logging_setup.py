@@ -38,6 +38,26 @@ def test_credential_shapes_are_masked_without_configuration() -> None:
     assert token not in out and "sk-ant-api03" not in out
 
 
+def test_openai_credentials_are_masked_without_configuration() -> None:
+    key = "sk-proj-" + "a1B2" * 12
+    secret = "whsec_" + "QUJDREVGR0hJSktM" * 2
+    out = _format(f"auth failed: {key} / {secret}")
+    assert key not in out and secret not in out and out.count("***") == 2
+
+
+def test_caller_numbers_in_structured_fields_are_masked() -> None:
+    import json
+    import logging
+
+    from app.logging_setup import JsonFormatter
+
+    record = logging.makeLogRecord(
+        {"msg": "Incoming SIP call accepted", "caller": "+37061234567", "levelname": "INFO"}
+    )
+    out = json.loads(JsonFormatter().format(record))
+    assert "61234567" not in out["caller"] and out["caller"].endswith("67")
+
+
 def test_secret_values_lists_only_set_secrets() -> None:
     from app.config import Settings
 

@@ -7,7 +7,8 @@ decides). The signature is verified with the project webhook secret (Standard We
 webhook-id / webhook-timestamp / webhook-signature, 5-minute tolerance) before anything else.
 
 The webhook answers 200 right away; screening, accept and the call itself run in the
-background, so a slow accept never makes OpenAI re-deliver the event.
+background, so a slow accept never makes OpenAI re-deliver the event. Before the signature
+check, requests are rate-limited per client IP and globally (HTTP 429).
 """
 
 import json
@@ -73,6 +74,9 @@ class LiveDeps:
     host: LiveHost
     summarizer: CallSummarizer | None = None
     caller_limiter: SlidingWindowLimiter | None = None
+    # Webhook flood limits; None = unlimited (tests).
+    ip_limiter: SlidingWindowLimiter | None = None
+    global_limiter: SlidingWindowLimiter | None = None
     timings: LiveCallTimings | None = None
     _webhook_ids: OrderedDict[str, None] = field(default_factory=OrderedDict)
     _session_ids: OrderedDict[str, None] = field(default_factory=OrderedDict)
@@ -124,7 +128,35 @@ def create_live_deps(
         host=host,
         summarizer=summarizer,
         caller_limiter=caller_limiter,
+        ip_limiter=SlidingWindowLimiter(settings.webhook_requests_per_ip_per_minute, 60),
+        global_limiter=SlidingWindowLimiter(settings.webhook_requests_per_minute, 60),
     )
+
+
+def client_ip(request: Request) -> str:
+    """The sender's IP for rate limiting, as the platform proxy saw it.
+
+    Not request.client: app.serve trusts every X-Forwarded-For entry, and the left-most one is
+    whatever the sender wrote. Fly.io sets Fly-Client-IP itself; otherwise the right-most
+    X-Forwarded-For entry is the one our proxy appended.
+    """
+    fly = request.headers.get("fly-client-ip", "").strip()
+    if fly:
+        return fly
+    forwarded = [h.strip() for h in request.headers.get("x-forwarded-for", "").split(",")]
+    if forwarded and forwarded[-1]:
+        return forwarded[-1]
+    return request.client.host if request.client else "unknown"
+
+
+def _rate_limited(deps: LiveDeps, request: Request) -> bool:
+    if deps.global_limiter is not None and not deps.global_limiter.allow("*"):
+        logger.warning("OpenAI webhook rate limit reached (all senders)")
+        return True
+    if deps.ip_limiter is not None and not deps.ip_limiter.allow(client_ip(request)):
+        logger.warning("OpenAI webhook rate limit reached for one sender")
+        return True
+    return False
 
 
 @router.post("/webhook")
@@ -137,6 +169,8 @@ async def openai_webhook(request: Request) -> Response:
     if secret is None:
         logger.error("OPENAI_WEBHOOK_SECRET is not set; cannot verify the webhook")
         return Response(status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
+    if _rate_limited(deps, request):
+        return Response(status_code=status.HTTP_429_TOO_MANY_REQUESTS)
 
     body = await request.body()
     if len(body) > _MAX_BODY_BYTES:
