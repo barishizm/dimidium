@@ -3,13 +3,17 @@
 The live agent is not involved: the summary is made from the stored transcript once the call
 has ended, so a slow or failed summary never affects the caller. On any failure the owner
 still gets the plain facts (duration, decision, end reason).
+
+The summarizer sits behind `CallSummarizer`. The default calls the backend model through the
+Responses API (SUMMARY_PROVIDER=openai); SUMMARY_PROVIDER=anthropic uses Claude instead.
 """
 
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any, Protocol
 
-import anthropic
+from openai import AsyncOpenAI, OpenAIError
 from pydantic import BaseModel, Field
 
 from app.config import Settings
@@ -88,29 +92,66 @@ def build_prompt(session: CallSession, facts: CallFacts) -> str:
     )
 
 
-class CallSummarizer:
-    def __init__(self, client: anthropic.AsyncAnthropic, model: str) -> None:
-        self._client = client
-        self._model = model
-
-    @classmethod
-    def from_settings(cls, settings: Settings) -> "CallSummarizer | None":
-        if settings.anthropic_api_key is None:
-            return None
-        client = anthropic.AsyncAnthropic(
-            api_key=settings.anthropic_api_key.get_secret_value(),
-            timeout=settings.summary_timeout_seconds,
-            max_retries=1,
-        )
-        return cls(client, settings.summary_model)
+class CallSummarizer(Protocol):
+    model: str
 
     async def summarize(self, session: CallSession, facts: CallFacts) -> CallSummary | None:
-        """The summary, or None on any failure (logged)."""
-        if not any(t.speaker == "caller" for t in session.transcript):
+        """The summary, or None when there is nothing to summarize or on any failure (logged)."""
+        ...
+
+
+def _has_caller_speech(session: CallSession) -> bool:
+    return any(t.speaker == "caller" for t in session.transcript)
+
+
+class ResponsesSummarizer:
+    """The default: the backend model through the Responses API, with structured output."""
+
+    def __init__(self, client: AsyncOpenAI, model: str) -> None:
+        self._client = client
+        self.model = model
+
+    async def summarize(self, session: CallSession, facts: CallFacts) -> CallSummary | None:
+        if not _has_caller_speech(session):
+            return None
+        try:
+            response = await self._client.responses.parse(
+                model=self.model,
+                instructions=SUMMARY_SYSTEM,
+                input=build_prompt(session, facts),
+                text_format=CallSummary,
+                max_output_tokens=SUMMARY_MAX_TOKENS,
+                reasoning={"effort": "low"},
+                # The transcript is personal data: no 30-day application state at OpenAI.
+                store=False,
+            )
+        except OpenAIError as exc:
+            logger.error("Summary request failed: %s", type(exc).__name__)
+            return None
+        except Exception:
+            logger.exception("Summary request failed")
+            return None
+        if response.status != "completed" or response.output_parsed is None:
+            logger.warning("No usable summary (status=%s)", response.status)
+            return None
+        return response.output_parsed
+
+
+class AnthropicSummarizer:
+    """Alternative (SUMMARY_PROVIDER=anthropic); needs `pip install anthropic`."""
+
+    def __init__(self, client: Any, model: str) -> None:
+        self._client = client
+        self.model = model
+
+    async def summarize(self, session: CallSession, facts: CallFacts) -> CallSummary | None:
+        import anthropic
+
+        if not _has_caller_speech(session):
             return None
         try:
             response = await self._client.messages.parse(
-                model=self._model,
+                model=self.model,
                 max_tokens=SUMMARY_MAX_TOKENS,
                 system=SUMMARY_SYSTEM,
                 output_config={"effort": "low"},
@@ -129,7 +170,30 @@ class CallSummarizer:
         if response.stop_reason != "end_turn" or response.parsed_output is None:
             logger.warning("No usable summary (stop_reason=%s)", response.stop_reason)
             return None
-        return response.parsed_output
+        return response.parsed_output  # type: ignore[no-any-return]
+
+
+def create_summarizer(settings: Settings) -> CallSummarizer | None:
+    """None when the chosen provider has no API key (the owner then gets the plain facts)."""
+    if settings.summary_provider == "anthropic":
+        if settings.anthropic_api_key is None:
+            return None
+        import anthropic
+
+        client = anthropic.AsyncAnthropic(
+            api_key=settings.anthropic_api_key.get_secret_value(),
+            timeout=settings.summary_timeout_seconds,
+            max_retries=1,
+        )
+        return AnthropicSummarizer(client, settings.summary_model or "claude-haiku-5-5")
+    if settings.openai_api_key is None:
+        return None
+    openai_client = AsyncOpenAI(
+        api_key=settings.openai_api_key.get_secret_value(),
+        timeout=settings.summary_timeout_seconds,
+        max_retries=1,
+    )
+    return ResponsesSummarizer(openai_client, settings.summary_model or settings.live_backend_model)
 
 
 def format_report(

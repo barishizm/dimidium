@@ -13,8 +13,6 @@ dependencies = [
     "uvicorn[standard]>=0.30",
     "pydantic-settings>=2.4",
     "aiosqlite>=0.20",
-    # Post-call summary (moves to the Responses API in a later commit).
-    "anthropic>=2.1",
     # GPT-Live sessions, SIP call control and sideband (openai.resources.live).
     "openai[realtime]>=3.36,<4",
     "pyyaml>=6",
@@ -24,6 +22,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# SUMMARY_PROVIDER=anthropic: post-call summaries with Claude instead of the backend model.
+anthropic = [
+    "anthropic>=2.1",
+]
 # scripts/live_smoke.py: decode and resample any caller recording.
 audio = [
     "numpy>=2",

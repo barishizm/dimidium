@@ -11,6 +11,7 @@ OffModeAction = Literal["voicemail", "reject"]
 # Values accepted by delegation.responses in the openai SDK; the backend model may support fewer.
 LiveReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh"]
 LiveServiceTier = Literal["auto", "default", "flex", "priority"]
+SummaryProvider = Literal["openai", "anthropic"]
 
 
 class Settings(BaseSettings):
@@ -38,11 +39,13 @@ class Settings(BaseSettings):
     # workplace, family names...). The owner's numbers are always included. Matched in code.
     private_terms: str = ""
 
-    # Post-call summary (Anthropic)
-    anthropic_api_key: SecretStr | None = None
     # Post-call summary for the owner: a separate, cheap call after the phone call has ended.
-    summary_model: str = "claude-haiku-5-5"
+    # "openai": Responses API with SUMMARY_MODEL (empty = LIVE_BACKEND_MODEL). "anthropic":
+    # Claude with ANTHROPIC_API_KEY (pip install anthropic; empty model = claude-haiku-5-5).
+    summary_provider: SummaryProvider = "openai"
+    summary_model: str | None = None
     summary_timeout_seconds: float = Field(default=30, gt=0)
+    anthropic_api_key: SecretStr | None = None
 
     # OpenAI GPT-Live (voice) with Responses delegation (backend)
     openai_api_key: SecretStr | None = None

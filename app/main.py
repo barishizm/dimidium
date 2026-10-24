@@ -17,7 +17,7 @@ from app.live.webhook import router as live_router
 from app.logging_setup import setup_logging
 from app.owner_channel import OwnerChannel, start_telegram
 from app.owner_commands import OwnerCommands
-from app.post_call import CallSummarizer
+from app.post_call import CallSummarizer, create_summarizer
 from app.rate_limit import SlidingWindowLimiter
 from app.retention import retention_loop
 from app.rules import RulesEngine
@@ -32,7 +32,7 @@ def status_lines(
     summarizer: CallSummarizer | None,
 ) -> list[str]:
     """Live state for /status (Turkish)."""
-    summary_model = settings.summary_model if summarizer else "kapalı (API anahtarı yok)"
+    summary_model = summarizer.model if summarizer else "kapalı (API anahtarı yok)"
     return [
         f"Aktif arama: {len(CALL_SESSION_REGISTRY)}",
         f"Cevap bekleyen soru: {len(channel.pending_call_sids) if channel else 0}",
@@ -60,7 +60,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     channel = telegram.channel if telegram else None
     rules = RulesEngine.from_yaml(settings.rules_path)
     modes = await AnswerModeStore.load(settings.db_path)
-    summarizer = CallSummarizer.from_settings(settings)
+    summarizer = create_summarizer(settings)
     host = AppHost()
     app.state.host = host
     app.state.live = create_live_deps(

@@ -114,8 +114,9 @@ Commands (also in the bot's menu):
 | `/status` | Mode, active calls, pending questions, GPT-Live and summary readiness |
 
 After every call you get a short Turkish report: who, why, what was decided, what the caller was
-told, and what to follow up. It comes from a separate model call (`SUMMARY_MODEL`) once the call
-has ended, so it never slows the call down; if that call fails, you get the plain facts instead.
+told, and what to follow up. It comes from a separate Responses call to the backend model
+(`SUMMARY_PROVIDER`/`SUMMARY_MODEL`; Claude is an option) once the call has ended, so it never
+slows the call down; if that call fails, you get the plain facts instead.
 Routine calls arrive silently; calls with a message left, a suspicious-call flag, a hang-up on
 hold or a follow-up arrive with a normal notification.
 
