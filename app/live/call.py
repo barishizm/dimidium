@@ -851,6 +851,7 @@ class LiveCall:
             self._pending_question = None
             if result.timed_out:
                 return owner_timeout_output(self._settings.hold_timeout_seconds)
+            result = await self._scrub_decision(result)
             self._session.owner_decision = result.decision_text_en
             heard = list(self._heard_on_hold or [])
             partial = self._assembler.partial("caller")
@@ -867,6 +868,24 @@ class LiveCall:
             if not (self._done or self._closed.is_set()):
                 # Still set only when the call ended during the hold (see finish()).
                 self._pending_question = None
+
+    async def _scrub_decision(self, result: AskOwnerResult) -> AskOwnerResult:
+        """The models never see private details, not even from the owner's own reply: a
+        PRIVATE_TERMS word or the owner's number in it is replaced before it is returned."""
+        texts = [result.decision_text_en, result.free_text_original or ""]
+        if not any(self._guard.leaks(text) for text in texts):
+            return result
+        logger.warning("Private detail removed from the owner's decision", extra=self._log())
+        await self._alert(
+            "Cevabındaki özel bilgi (adres, numara vb.) arayana iletilmedi; geri kalanı iletildi."
+        )
+        free_text = result.free_text_original
+        return result.model_copy(
+            update={
+                "decision_text_en": self._guard.redact(result.decision_text_en),
+                "free_text_original": self._guard.redact(free_text) if free_text else None,
+            }
+        )
 
     async def _keep_company(self, since: float) -> None:
         """Never silence on hold: quiet state for the agent, the hold announcement if the

@@ -124,6 +124,11 @@ def _digits(text: str) -> str:
     return re.sub(r"\D", "", text)
 
 
+# Placeholder for a private detail removed from text that goes back to the model.
+REDACTED = "[private detail removed]"
+_PHONE_LIKE = re.compile(r"\+?\d[\d\s().-]{4,}\d")
+
+
 @dataclass(frozen=True)
 class PrivateInfoGuard:
     """Blocks spoken text that contains a configured private detail.
@@ -147,6 +152,19 @@ class PrivateInfoGuard:
             return True
         digits = _digits(text)
         return any(tail in digits for tail in self.numbers)
+
+    def redact(self, text: str) -> str:
+        """`text` with every configured private term and number replaced by a placeholder."""
+        for term in self.terms:
+            text = re.sub(re.escape(term), REDACTED, text, flags=re.IGNORECASE)
+        if not self.numbers:
+            return text
+
+        def number(match: re.Match[str]) -> str:
+            digits = _digits(match.group(0))
+            return REDACTED if any(tail in digits for tail in self.numbers) else match.group(0)
+
+        return _PHONE_LIKE.sub(number, text)
 
 
 class GuardrailHit(StrEnum):

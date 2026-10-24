@@ -351,6 +351,24 @@ async def test_owner_free_text_decision(tmp_path: Path) -> None:
     await h.finish()
 
 
+async def test_private_detail_in_owner_reply_never_reaches_the_model(tmp_path: Path) -> None:
+    bot = FakeBot()
+    owner = OwnerChannel(bot, OWNER)  # type: ignore[arg-type]
+    h = Harness(tmp_path, channel=owner, private_terms="Žirmūnų 12")  # type: ignore[arg-type]
+    await h.start()
+    h.link.push(*backend_response("resp_1", ("ask_owner", ASK_ARGS, "c1")))
+    await until(lambda: bot.sent)
+    await owner.handle_text(OWNER, OWNER, "Žirmūnų 12 adresine bıraksın")
+
+    await until(lambda: h.outputs())
+    result = h.output_json()[0]
+    assert "Žirmūnų" not in h.outputs()[0]
+    assert result["free_text_original"] == "[private detail removed] adresine bıraksın"
+    assert any("arayana iletilmedi" in m["text"] for m in bot.sent)
+    h.link.push(closed())
+    await h.finish()
+
+
 async def test_owner_timeout_then_message_and_goodbye(tmp_path: Path) -> None:
     bot = FakeBot()
     owner = OwnerChannel(bot, OWNER)  # type: ignore[arg-type]

@@ -84,3 +84,13 @@ def test_private_info_guard() -> None:
     assert not guard.leaks("Ab ovo")  # too short to be a term
     assert not guard.leaks("Laba diena")
     assert not PrivateInfoGuard().leaks("anything 61234567")
+
+
+def test_private_info_guard_redacts_terms_and_numbers() -> None:
+    from app.guards import REDACTED
+
+    guard = PrivateInfoGuard.build(["Vytauto 5"], ["+370 612 34567"])
+    text = guard.redact("Leave it at vytauto 5 or call 8 612 34567, flat 12.")
+    assert text == f"Leave it at {REDACTED} or call {REDACTED}, flat 12."
+    assert not guard.leaks(text)
+    assert PrivateInfoGuard().redact("call 61234567") == "call 61234567"
