@@ -7,7 +7,7 @@ from app import db
 from app.answer_mode import AnswerMode, AnswerModeStore
 from app.models import CallSession, TranscriptTurn
 from app.owner_commands import HELP_TEXT, OwnerCommands, mask_number
-from app.retention import purge_old_transcripts
+from app.retention import purge_old_records, purge_old_transcripts
 from app.rules import RulesConfig
 
 RULES = RulesConfig.model_validate(
@@ -141,6 +141,31 @@ async def test_retention_deletes_only_old_transcripts(db_path: str) -> None:
     assert await purge_old_transcripts(db_path, 30) == 1
     assert [c.call_sid for c in await db.recent_calls(db_path)] == ["CA_NEW", "CA_OLD"]
     assert await purge_old_transcripts(db_path, 30) == 0
+
+
+async def test_record_retention_deletes_old_calls_messages_and_their_transcripts(
+    db_path: str,
+) -> None:
+    import aiosqlite
+
+    now = datetime.now(UTC)
+    await add_call(db_path, "CA_OLD", now - timedelta(days=400))
+    await add_call(db_path, "CA_NEW", now - timedelta(days=10))
+    await db.add_owner_message(db_path, "CA_NEW", "yeni mesaj", delivered=False)
+    async with aiosqlite.connect(db_path) as conn:
+        await conn.execute(
+            "INSERT INTO messages_for_owner (call_sid, created_at, message) VALUES (?, ?, ?)",
+            ("CA_OLD", (now - timedelta(days=400)).isoformat(), "eski mesaj"),
+        )
+        await conn.commit()
+
+    assert await purge_old_records(db_path, 365) == (1, 1)
+    assert [c.call_sid for c in await db.recent_calls(db_path)] == ["CA_NEW"]
+    assert [m.message for m in await db.undelivered_messages(db_path)] == ["yeni mesaj"]
+    async with aiosqlite.connect(db_path) as conn:
+        cursor = await conn.execute("SELECT DISTINCT call_sid FROM transcript_turns")
+        assert [row[0] for row in await cursor.fetchall()] == ["CA_NEW"]
+    assert await purge_old_records(db_path, 365) == (0, 0)
 
 
 async def test_init_db_upgrades_an_old_calls_table(tmp_path: Path) -> None:

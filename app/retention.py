@@ -1,4 +1,7 @@
-"""Daily transcript cleanup (GDPR storage limitation). Raw audio is never stored at all."""
+"""Daily cleanup (GDPR storage limitation). Raw audio is never stored at all.
+
+Transcripts go after RETENTION_DAYS; call rows, summaries and caller messages (also personal
+data) after RECORDS_RETENTION_DAYS."""
 
 import asyncio
 import logging
@@ -19,13 +22,30 @@ async def purge_old_transcripts(db_path: str, retention_days: int) -> int:
     return deleted
 
 
+async def purge_old_records(db_path: str, records_retention_days: int) -> tuple[int, int]:
+    cutoff = datetime.now(UTC) - timedelta(days=records_retention_days)
+    calls, messages = await db.delete_records_before(db_path, cutoff)
+    if calls or messages:
+        logger.info(
+            "Deleted %d calls and %d messages older than %d days",
+            calls,
+            messages,
+            records_retention_days,
+        )
+    return calls, messages
+
+
 async def retention_loop(
-    db_path: str, retention_days: int, interval: float = CLEANUP_INTERVAL_SECONDS
+    db_path: str,
+    retention_days: int,
+    records_retention_days: int,
+    interval: float = CLEANUP_INTERVAL_SECONDS,
 ) -> None:
     """Purge once at startup, then every `interval` seconds. Never raises (except cancel)."""
     while True:
         try:
             await purge_old_transcripts(db_path, retention_days)
+            await purge_old_records(db_path, records_retention_days)
         except Exception:
-            logger.exception("Transcript cleanup failed; retrying at the next run")
+            logger.exception("Data cleanup failed; retrying at the next run")
         await asyncio.sleep(interval)

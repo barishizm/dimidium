@@ -38,7 +38,8 @@ def status_lines(
         f"Cevap bekleyen soru: {len(channel.pending_call_sids) if channel else 0}",
         f"Özet modeli: {summary_model}",
         f"GPT-Live (SIP): {live_status(settings)}",
-        f"Transkript saklama: {settings.retention_days} gün",
+        f"Saklama: transkript {settings.retention_days} gün, "
+        f"arama kayıtları {settings.records_retention_days} gün",
     ]
 
 
@@ -84,7 +85,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
         telegram.channel.on_command = commands.handle
     cleanup_task = asyncio.create_task(
-        retention_loop(settings.db_path, settings.retention_days), name="transcript-retention"
+        retention_loop(settings.db_path, settings.retention_days, settings.records_retention_days),
+        name="data-retention",
     )
     logger.info("startup complete", extra={"db_path": settings.db_path})
     try:

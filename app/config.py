@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     rules_path: str = "rules.yaml"
     # Transcripts older than this are deleted by a daily cleanup. Raw audio is never stored.
     retention_days: int = Field(default=30, ge=1)
+    # Call rows, summaries and caller messages older than this are deleted too.
+    records_retention_days: int = Field(default=365, ge=1)
     off_mode_action: OffModeAction = "voicemail"
     # Your real phone number (E.164): never spoken (checked in code with PRIVATE_TERMS).
     # OWNER_FORWARD_NUMBER is the old name of the same setting.

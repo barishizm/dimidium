@@ -131,8 +131,10 @@ curl http://localhost:8000/health   # {"status":"ok"}
 ```
 
 On startup the app creates the SQLite database at `DB_PATH` (default `data/dimidium.db`). Every
-call's transcript goes there; transcripts older than `RETENTION_DAYS` (default 30) are deleted
-by a daily cleanup, while call rows, summaries and messages stay. The app never stores audio.
+call's transcript goes there; a daily cleanup deletes transcripts older than `RETENTION_DAYS`
+(30) and call rows, summaries and messages older than `RECORDS_RETENTION_DAYS` (365). The app
+never receives or stores audio. What OpenAI, Twilio and Telegram get and keep:
+[docs/PRIVACY.md](docs/PRIVACY.md).
 
 ## Test and lint
 
@@ -269,5 +271,6 @@ from the dashboard (**Manual Deploy**) when no call is active.
 | `docs/SETUP_SIP.md` | OpenAI project, webhook, Twilio SIP trunk, first test call |
 | `docs/SETUP.md` | Twilio number, GSM call forwarding, Telegram bot, cost per minute |
 | `docs/GPT_LIVE_DESIGN.md` | Design: event flow, functions, hold, errors |
+| `docs/PRIVACY.md` | GDPR: who processes what, retention, OpenAI `store` settings, open points |
 | `Dockerfile`, `docker-entrypoint.sh`, `docker-compose.yml` | Container image (non-root) and local compose run |
 | `fly.toml`, `render.yaml` | Single always-on EU instance on Fly.io or Render |

@@ -1124,6 +1124,8 @@ class LiveCall:
                 end_reason=end_reason,
                 follow_up=summary.needs_follow_up if summary else bool(facts.messages_left),
                 flagged=facts.flagged,
+                disclosure_verified=self.disclosure_verified,
+                disclosure_resent=self.disclosure_resent,
             )
         except Exception:
             logger.exception("Could not store the call outcome", extra=self._log())

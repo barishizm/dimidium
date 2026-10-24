@@ -22,7 +22,10 @@ CREATE TABLE IF NOT EXISTS calls (
     end_reason      TEXT,
     summary         TEXT,
     follow_up       INTEGER NOT NULL DEFAULT 0,
-    flagged         INTEGER NOT NULL DEFAULT 0
+    flagged         INTEGER NOT NULL DEFAULT 0,
+    -- GDPR audit: was the AI + recording disclosure found in the agent's speech (NULL: unknown)
+    disclosure_verified INTEGER,
+    disclosure_resent   INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS transcript_turns (
@@ -54,6 +57,8 @@ _ADDED_COLUMNS = (
     ("calls", "summary", "TEXT"),
     ("calls", "follow_up", "INTEGER NOT NULL DEFAULT 0"),
     ("calls", "flagged", "INTEGER NOT NULL DEFAULT 0"),
+    ("calls", "disclosure_verified", "INTEGER"),
+    ("calls", "disclosure_resent", "INTEGER NOT NULL DEFAULT 0"),
 )
 
 
@@ -166,13 +171,23 @@ async def set_call_outcome(
     end_reason: str | None,
     follow_up: bool,
     flagged: bool,
+    disclosure_verified: bool | None = None,
+    disclosure_resent: bool = False,
 ) -> None:
     db = await _connect(db_path)
     try:
         await db.execute(
-            "UPDATE calls SET summary = ?, end_reason = ?, follow_up = ?, flagged = ? "
-            "WHERE call_sid = ?",
-            (summary, end_reason, int(follow_up), int(flagged), call_sid),
+            "UPDATE calls SET summary = ?, end_reason = ?, follow_up = ?, flagged = ?, "
+            "disclosure_verified = ?, disclosure_resent = ? WHERE call_sid = ?",
+            (
+                summary,
+                end_reason,
+                int(follow_up),
+                int(flagged),
+                None if disclosure_verified is None else int(disclosure_verified),
+                int(disclosure_resent),
+                call_sid,
+            ),
         )
         await db.commit()
     finally:
@@ -288,6 +303,22 @@ async def delete_transcripts_before(db_path: str, cutoff: datetime) -> int:
             (cutoff.isoformat(),),
         )
         deleted = cursor.rowcount
+        await db.commit()
+    finally:
+        await db.close()
+    return deleted
+
+
+async def delete_records_before(db_path: str, cutoff: datetime) -> tuple[int, int]:
+    """Delete calls that started before `cutoff` (their transcripts go with them) and owner
+    messages created before it. Returns (calls deleted, messages deleted)."""
+    db = await _connect(db_path)
+    try:
+        messages = await db.execute(
+            "DELETE FROM messages_for_owner WHERE created_at < ?", (cutoff.isoformat(),)
+        )
+        calls = await db.execute("DELETE FROM calls WHERE started_at < ?", (cutoff.isoformat(),))
+        deleted = (calls.rowcount, messages.rowcount)
         await db.commit()
     finally:
         await db.close()

@@ -213,6 +213,12 @@ async def test_transcripts_are_stored_and_the_call_is_reported(tmp_path: Path) -
     report = h.channel.info[-1]
     assert "Arama bitti" in report and "arayan kapattı" in report
     assert h.host.tracked == {}
+    async with aiosqlite.connect(h.settings.db_path) as conn:
+        cursor = await conn.execute(
+            "SELECT disclosure_verified, disclosure_resent FROM calls WHERE call_sid = ?",
+            (h.session.call_sid,),
+        )
+        assert await cursor.fetchone() == (1, 0)
 
 
 async def test_replayed_events_after_reattach_are_not_counted_twice(tmp_path: Path) -> None:
