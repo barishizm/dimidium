@@ -434,6 +434,20 @@ class LiveCall:
             with suppress(Exception):
                 await link.close()
 
+    @property
+    def owner_pending(self) -> bool:
+        """An ask_owner is waiting for the owner."""
+        return self._pending_question is not None
+
+    @property
+    def functions_running(self) -> bool:
+        """Function calls whose outputs have not been returned yet."""
+        return bool(self._responses)
+
+    async def hang_up_now(self, reason: str) -> None:
+        """End the call without a goodbye (local test calls)."""
+        await self._hang_up(reason)
+
     async def end_for_shutdown(self) -> None:
         """Server shutdown: say goodbye and hang up (TelephonyDeps.end_active_calls)."""
         self._spawn(self._finish_with_goodbye("sunucu yeniden başlatılıyor", WRAP_UP_INSTRUCTION))
