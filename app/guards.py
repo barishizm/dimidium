@@ -6,7 +6,11 @@ The system prompt states the rules; these guards enforce the parts that can be c
   prompt-injection attempts, are pointed out to the model and flagged to the owner even if the
   model forgets to;
 - `PrivateInfoGuard`: configured private details (address, the owner's real number, ...) are
-  never spoken, whatever the model writes.
+  never spoken, whatever the model writes;
+- `detect_guardrail_hits`: the narrower patterns the sideband guardrail acts on (it redirects
+  the agent, flags the call and blocks related function calls, see app/live/guardrail.py);
+- `mentions_sensitive_material`: whether function arguments carry codes, passwords, bank or
+  payment details (English, Lithuanian and Turkish, since summaries are Turkish).
 """
 
 import re
@@ -46,6 +50,12 @@ def sanitize_for_speech(text: str) -> str:
 
 def word_count(text: str) -> int:
     return len(text.split())
+
+
+def fold(text: str) -> str:
+    """Lowercase without diacritics: "Įrašomas" -> "irasomas", "Şifre" -> "sifre"."""
+    decomposed = unicodedata.normalize("NFKD", text.replace("ı", "i"))
+    return "".join(c for c in decomposed if not unicodedata.combining(c)).casefold()
 
 
 class CallerRisk(StrEnum):
@@ -137,3 +147,95 @@ class PrivateInfoGuard:
             return True
         digits = _digits(text)
         return any(tail in digits for tail in self.numbers)
+
+
+class GuardrailHit(StrEnum):
+    # The caller asks for or offers a code, password, bank/card details, or a payment.
+    SENSITIVE_REQUEST = "sensitive_request"
+    # The caller tries to get the owner's address, whereabouts, schedule or numbers.
+    OWNER_INFO = "owner_info"
+
+
+# Matched on folded text (no diacritics, lowercase), so speech-recognition spellings with or
+# without Lithuanian letters both match. Deliberately about *requests* and *offers*: "it is
+# already paid" or "is he home?" (couriers ask that; the owner decides) do not trigger.
+_W = r"(?:\s+\S+){0,3}?"
+_SENSITIVE_REQUEST = re.compile(
+    # English: asking for / dictating codes and passwords
+    rf"\b(?:tell|give|read|send|say|share|forward|need|want|confirm|dictate){_W}\s+"
+    r"(?:code|password|passcode|pin|otp)\b"
+    r"|\b(?:verification|confirmation|security|one[- ]?time|sms|login|access|bank|smart-?id)"
+    r"\s+(?:code|password|pin)"
+    r"|\bpassword\b|\bcvv\b|\bcvc\b|\biban\b"
+    r"|\b(?:card|account|bank\s+account)\s+(?:number|details)"
+    # English: payment requests
+    r"|\b(?:pay|transfer|send|wire)\s+(?:\S+\s+){0,2}?(?:money|fee|payment|deposit|euros?)\b"
+    r"|\bpayment\s+(?:link|details)|\bbank\s+transfer\b|\bpay\s+(?:now|online|by\s+card)"
+    # Lithuanian: codes, passwords
+    r"|\b(?:patvirtinimo|vienkartin\w*|sms|saugos|prisijungimo|banko|smart-?id)\s+kod"
+    r"|\bkod\w*\s+(?:is|gaut|atsiust|kuri\w*\s+gav|pasiekt)"
+    rf"|\b(?:pasakyk|padiktuok|perskaityk|atsiusk|perduok|duok|reik|nurodyk)\w*{_W}\s+kod"
+    r"|slaptazod|\bpin\b"
+    # Lithuanian: bank and card details, payment requests
+    r"|\bkortel\w*\s+(?:numer|duomen)|\bsaskaitos\s+numer"
+    r"|\bbanko\s+(?:saskait|rekvizit|duomen|kortel)"
+    r"|\b(?:reik\w*|turit\w*|turesit\w*|prasau|galit\w*|tur\w*)\s+(?:\S+\s+){0,2}?"
+    r"(?:sumoket|apmoket|pervest|sumokek|apmokek)"
+    r"|\bpervesk\w*|\bmokejimo\s+(?:nuorod|duomen)",
+    re.IGNORECASE,
+)
+_OWNER_INFO = re.compile(
+    # English
+    r"\bwhere\s+(?:does|do|did)\s+(?:he|she|they|the\s+owner|your\s+boss)\s+"
+    r"(?:live|work|stay)"
+    r"|\bwhere\s+(?:he|she|the\s+owner)\s+(?:lives|works|stays|is\s+now|is\s+right\s+now)"
+    r"|\b(?:his|her|the\s+owner'?s?|your)\s+(?:home\s+|exact\s+|street\s+)?"
+    r"(?:address|location|whereabouts)"
+    r"|\bwhere\s+(?:is|'s)\s+(?:he|she|the\s+owner)\b"
+    r"|\bwhen\s+(?:is|will|does)\s+(?:he|she|the\s+owner)\s+(?:be\s+)?"
+    r"(?:back|home|away|leav|return|come\s+home|get\s+home)"
+    r"|\b(?:his|her|the\s+owner'?s?)\s+(?:schedule|routine|calendar|plans|movements)"
+    r"|\b(?:his|her|the\s+owner'?s?)\s+(?:\S+\s+)?(?:phone|mobile|cell)?\s*number"
+    r"|\bis\s+(?:he|she|the\s+owner)\s+(?:away|on\s+(?:vacation|holiday)|abroad|"
+    r"out\s+of\s+town|travell?ing)"
+    r"|\b(?:is|will)\s+(?:the\s+)?(?:house|home|flat|apartment)\s+(?:be\s+)?empty"
+    # Lithuanian
+    r"|\bkur\s+(?:jis|ji|savininkas|jie)\s+(?:gyven|dirb|dabar|yra|buna|isvyk)"
+    r"|\b(?:jo|jos|savininko|jusu|tavo)\s+(?:namu\s+|gyvenamosios\s+vietos\s+)?adres"
+    r"|\b(?:jo|jos|savininko)\s+(?:buvimo\s+viet|tvarkarast|grafik|planu|planai)"
+    r"|\b(?:jo|jos|savininko)\s+(?:\S+\s+)?(?:telefono\s+)?numer"
+    r"|\bkada\s+(?:jis|ji|savininkas)\s+(?:gris|grizt|bus\s+namie|bus\s+namuose|isvyk"
+    r"|iseis|islek|nebus)"
+    r"|\bar\s+(?:jis|ji|savininkas)\s+(?:isvyk|atostog|uzsieny|islekes)"
+    r"|\bar\s+namai\s+(?:tusti|bus\s+tusti)",
+    re.IGNORECASE,
+)
+
+
+def detect_guardrail_hits(text: str) -> set[GuardrailHit]:
+    """Guardrail categories the caller's words trigger (possibly none)."""
+    folded = fold(text)
+    hits: set[GuardrailHit] = set()
+    if _SENSITIVE_REQUEST.search(folded):
+        hits.add(GuardrailHit.SENSITIVE_REQUEST)
+    if _OWNER_INFO.search(folded):
+        hits.add(GuardrailHit.OWNER_INFO)
+    return hits
+
+
+# Function arguments (Turkish summaries, English meanings, Lithuanian quotes) that carry codes,
+# passwords, bank/card details or payment. Broad on purpose: it only matters after a
+# SENSITIVE_REQUEST hit, where a false positive costs one refused function call.
+_SENSITIVE_MATERIAL = re.compile(
+    r"\bkod|\bcode\b|sifre|parola|password|passcode|\bpin\b|\botp\b|slaptazod"
+    r"|\biban\b|\bcvv\b|\bcvc\b|banka|\bbank|kart\w*\s+(?:numara|bilgi)|card"
+    r"|kortel|saskait|rekvizit|odeme|\bode\b|havale|\beft\b|para\s+(?:gonder|transfer|yatir)"
+    r"|\bpay|payment|transfer|money|mokejim|sumoket|apmoket|pervest|pervesk",
+    re.IGNORECASE,
+)
+# 4+ digits in a row (spaces and dashes allowed): a code, PIN or card number.
+_DIGIT_RUN = re.compile(r"\d(?:[\s-]?\d){3,}")
+
+
+def mentions_sensitive_material(text: str) -> bool:
+    return bool(_SENSITIVE_MATERIAL.search(fold(text)) or _DIGIT_RUN.search(text))

@@ -47,6 +47,11 @@ logger = logging.getLogger(__name__)
 
 # Re-attach attempts after the sideband drops ("reconnect once").
 MAX_RECONNECTS = 1
+# save_message calls per call. The model is driven by caller speech; this caps what one call
+# can push to Telegram and SQLite.
+MAX_MESSAGES_PER_CALL = 3
+# Distinct suspicious-call alerts per call (repeats of the same reason are dropped).
+MAX_FLAG_ALERTS = 3
 # Retries of a failed backend (Responses) turn before the fallback.
 MAX_BACKEND_RETRIES = 1
 # Timeline margin after the last reflected output audio before the goodbye counts as played.
@@ -123,6 +128,11 @@ FUNCTION_ERROR_OUTPUT = _output(
     status="error",
     error="function_failed",
     instruction="Apologize, offer to take a message, and do not promise anything.",
+)
+MESSAGE_LIMIT_OUTPUT = _output(
+    status="limit_reached",
+    instruction="The message for the owner is already saved. Do not save another one; say "
+    "goodbye and call end_call.",
 )
 ALREADY_ASKING_OUTPUT = _output(
     status="error",
@@ -324,6 +334,8 @@ class LiveCall:
         self._end_reason: str | None = None
         self.close_reason: str | None = None
         self.usage_seconds: float | None = None
+        self._messages_saved = 0
+        self._flag_alerts: set[str] = set()
         # For the end-of-call report.
         self.flagged = False
         self.messages_left = 0
@@ -737,14 +749,14 @@ class LiveCall:
             self._end_reason = f"asistan bitirdi: {args.reason}"
             return OK_OUTPUT
         if isinstance(args, SaveMessageInput):
+            if self._messages_saved >= MAX_MESSAGES_PER_CALL:
+                logger.warning("save_message over the per-call limit", extra=self._log())
+                return MESSAGE_LIMIT_OUTPUT
+            self._messages_saved += 1
             await asyncio.wait_for(self._save_message(args), self._t.function_timeout)
             return OK_OUTPUT
         if isinstance(args, FlagSuspiciousInput):
-            logger.warning("Suspicious call flagged", extra=self._log())
-            self.flagged = True
-            await asyncio.wait_for(
-                self._alert(f"Şüpheli arama: {args.reason}"), self._t.function_timeout
-            )
+            await asyncio.wait_for(self._flag(args.reason), self._t.function_timeout)
             return OK_OUTPUT
         return unknown_function_output(name)
 
@@ -850,6 +862,16 @@ class LiveCall:
     async def _alert(self, text: str) -> None:
         if self._push is not None:
             await self._push.send_info(f"⚠️ {self.tag}\n{text}")
+
+    async def _flag(self, reason: str) -> None:
+        """Mark the call suspicious and alert the owner, once per distinct reason (both the
+        model's flag_suspicious and our own guardrail end up here)."""
+        self.flagged = True
+        logger.warning("Suspicious call flagged", extra=self._log())
+        if reason in self._flag_alerts or len(self._flag_alerts) >= MAX_FLAG_ALERTS:
+            return
+        self._flag_alerts.add(reason)
+        await self._alert(f"Şüpheli arama: {reason}")
 
     # -- disclosure, limits, ending -------------------------------------------------------
 

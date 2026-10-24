@@ -5,20 +5,13 @@ GPT-Live sends transcript fragments without turn boundaries or a "done" event
 other side starts talking or the call ends.
 """
 
-import unicodedata
-
+from app.guards import fold
 from app.models import Speaker, TranscriptTurn
 
 # Folded (lowercase, no diacritics) word stems. "Atsiliepia dirbtinio intelekto asistentas...
 # Pokalbis įrašomas ir transkribuojamas." and the English fallback both match.
 _AI_MARKERS = ("dirbtin", "artificial intelligence", "ai assistant", "virtual assistant")
 _RECORDING_MARKERS = ("irasom", "irasin", "transkrib", "record", "transcrib")
-
-
-def fold(text: str) -> str:
-    """Lowercase without diacritics: "Įrašomas" -> "irasomas"."""
-    decomposed = unicodedata.normalize("NFKD", text)
-    return "".join(c for c in decomposed if not unicodedata.combining(c)).casefold()
 
 
 def disclosure_spoken(agent_text: str) -> bool:
