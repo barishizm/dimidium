@@ -1,6 +1,5 @@
 import asyncio
 from datetime import UTC, datetime
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -23,6 +22,7 @@ from app.owner_channel import (
     decision_to_result,
     parse_callback,
 )
+from tests.live_fakes import FakeBot
 
 OWNER = 1001
 STRANGER = 2002
@@ -32,27 +32,6 @@ OPTIONS = [
     OwnerOption(id="door", label_tr="Kapıya bırak", meaning_en="Leave the parcel at the door."),
     OwnerOption(id="locker", label_tr="Paketomata", meaning_en="Deliver to a parcel locker."),
 ]
-
-
-class FakeBot:
-    def __init__(self, fail_send: bool = False) -> None:
-        self.sent: list[dict[str, Any]] = []
-        self.edits: list[dict[str, Any]] = []
-        self._next_id = 100
-        self._fail_send = fail_send
-
-    async def send_message(self, chat_id: int, text: str, **kwargs: Any) -> SimpleNamespace:
-        if self._fail_send:
-            raise ConnectionError("telegram down")
-        self._next_id += 1
-        self.sent.append({"chat_id": chat_id, "text": text, "message_id": self._next_id, **kwargs})
-        return SimpleNamespace(message_id=self._next_id)
-
-    async def edit_message_text(self, text: str, **kwargs: Any) -> None:
-        self.edits.append({"text": text, **kwargs})
-
-    async def edit_message_reply_markup(self, **kwargs: Any) -> None:
-        self.edits.append({"text": None, **kwargs})
 
 
 class Clock:

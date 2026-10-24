@@ -14,10 +14,11 @@ Event and field names: openai SDK 3.36 (openai.types.live) and guides/voice-serv
 """
 
 import asyncio
+import json
 import logging
 from collections.abc import Awaitable, Callable, Coroutine
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
@@ -28,6 +29,7 @@ from app.agent.guards import RISK_EVENTS, PrivateInfoGuard, detect_caller_risk
 from app.agent.tools import (
     TOOL_INPUT_MODELS,
     AskOwnerInput,
+    AskOwnerResult,
     EndCallInput,
     FlagSuspiciousInput,
     SaveMessageInput,
@@ -85,25 +87,85 @@ STILL_WAITING_COMMENTARY = (
     "Still waiting for the owner's answer. Tell the caller briefly: " f'"{_say("still_trying")}"'
 )
 
-OK_OUTPUT = "OK"
-MESSAGE_ONLY_OUTPUT = (
-    "ERROR: the owner cannot be asked on this call. Take a message with save_message, then say "
-    "goodbye and call end_call."
+
+def owner_pending_thinking(waited: float) -> str:
+    """Quiet state for GPT-Live while ask_owner is pending (not spoken on append)."""
+    return (
+        f"The owner was asked on Telegram {round(waited)} seconds ago and has not answered yet. "
+        "Do not guess or promise a decision. If the caller speaks, answer briefly with what you "
+        "know and say you are still waiting for the owner's answer."
+    )
+
+
+# Each append event is limited to 500 tokens; our texts are far shorter, this is a backstop
+# (about 3 characters per token, on the safe side for Lithuanian).
+MAX_APPEND_CHARS = 1500
+
+
+# Function outputs are small JSON objects; the backend prompt documents every status.
+def _output(**fields: Any) -> str:
+    return json.dumps(fields, ensure_ascii=False)
+
+
+OK_OUTPUT = _output(status="ok")
+MESSAGE_ONLY_OUTPUT = _output(
+    status="unavailable",
+    instruction="The owner cannot be asked on this call. Take a message with save_message, "
+    "then say goodbye and call end_call.",
 )
-LIMIT_OUTPUT = (
-    "LIMIT: the owner was already asked the maximum number of times. Do not ask again. Use the "
-    "decision you have or take a message with save_message, then say goodbye and call end_call."
+LIMIT_OUTPUT = _output(
+    status="limit_reached",
+    instruction="The owner was already asked the maximum number of times. Do not ask again. "
+    "Use the decision you have or take a message with save_message, then say goodbye and call "
+    "end_call.",
 )
-FUNCTION_ERROR_OUTPUT = (
-    "ERROR: the function failed. Apologize, offer to take a message, and do not promise anything."
+FUNCTION_ERROR_OUTPUT = _output(
+    status="error",
+    error="function_failed",
+    instruction="Apologize, offer to take a message, and do not promise anything.",
 )
+ALREADY_ASKING_OUTPUT = _output(
+    status="error",
+    error="already_asking",
+    instruction="The owner is already being asked. Wait for that answer; do not ask again now.",
+)
+# Only logged in practice: once the caller has hung up, nothing is sent back.
+CALLER_HUNG_UP_OUTPUT = _output(status="caller_hung_up")
 
 
 def owner_timeout_output(hold_timeout: float) -> str:
-    return (
-        f"OWNER_TIMEOUT: the owner did not answer within {round(hold_timeout)} seconds. "
-        "Apologize, take a message with save_message, then say goodbye and call end_call."
+    return _output(
+        status="timeout",
+        waited_seconds=round(hold_timeout),
+        instruction="Apologize, take a message with save_message, then say goodbye and call "
+        "end_call.",
     )
+
+
+def owner_decision_output(result: AskOwnerResult, heard_on_hold: list[str]) -> str:
+    return _output(
+        status="decided",
+        decision_en=result.decision_text_en,
+        free_text_original=result.free_text_original,
+        # Raw caller speech (untrusted); JSON keeps it apart from the decision.
+        caller_said_during_hold=heard_on_hold,
+    )
+
+
+def invalid_arguments_output(name: str, problems: str, *, may_retry: bool) -> str:
+    instruction = (
+        f"Fix the arguments and call {name} once more."
+        if may_retry
+        else f"Do not call {name} again. Apologize, take a message with save_message if you "
+        "can, then say goodbye."
+    )
+    return _output(
+        status="error", error="invalid_arguments", details=problems, instruction=instruction
+    )
+
+
+def unknown_function_output(name: str) -> str:
+    return _output(status="error", error="unknown_function", details=f"no function {name!r}")
 
 
 # session.closed reasons -> Turkish end reason for the owner's report.
@@ -114,6 +176,24 @@ _CLOSE_REASONS_TR = {
     "content": "güvenlik filtresi görüşmeyi kesti",
     "connection_lost": "bağlantı koptu",
 }
+
+
+@dataclass
+class PendingResponse:
+    """The function calls of one backend response. Their outputs go back together, in the
+    order the calls arrived, followed by a single response.create (live-delegation guide)."""
+
+    response_id: str
+    delegation_id: str | None
+    # call_id -> output (None while the function runs); dicts keep arrival order.
+    outputs: dict[str, str | None] = field(default_factory=dict)
+    names: dict[str, str] = field(default_factory=dict)
+    completed: asyncio.Event = field(default_factory=asyncio.Event)
+    flushed: bool = False
+
+    @property
+    def ready(self) -> bool:
+        return all(output is not None for output in self.outputs.values())
 
 
 class CallHost(Protocol):
@@ -139,6 +219,13 @@ class LiveCallTimings:
     # On hold: speak the hold phrase ourselves if the agent said nothing this long.
     hold_announce_after: float = 2.5
     hold_phrase_interval: float = 20.0
+    # "Still trying" lines per hold.
+    hold_still_trying_max: int = 3
+    # Outputs ready before their response completed: wait this long for more calls of the
+    # same response (and its completion) before returning them anyway.
+    response_complete_wait: float = 2.0
+    # A sent response.create counts as waiting until the next response.created, or this long.
+    continuation_stale: float = 10.0
     reconnect_delay: float = 0.5
     # A client event waits this long for a re-attached sideband before it is dropped.
     send_wait: float = 5.0
@@ -158,6 +245,7 @@ class LiveCallTimings:
             goodbye_max=settings.live_goodbye_max_seconds,
             fallback_grace=settings.live_fallback_grace_seconds,
             hold_phrase_interval=settings.hold_phrase_interval_seconds,
+            hold_still_trying_max=settings.hold_still_trying_max,
         )
 
 
@@ -203,6 +291,14 @@ class LiveCall:
         self._tasks: set[asyncio.Task[None]] = set()
         self._seen_events: set[str] = set()
         self._seen_calls: set[str] = set()
+        # Backend responses with function calls, by response id; the latest response id per
+        # delegation (output_item.done does not carry one).
+        self._responses: dict[str, PendingResponse] = {}
+        self._current_response: dict[str | None, str] = {}
+        # Loop time of our last accepted response.create, until the next response starts.
+        self._continuation_sent_at: float | None = None
+        # Invalid-argument attempts per function: one retry, then the model must stop.
+        self._invalid_attempts: dict[str, int] = {}
         self._assembler = TranscriptAssembler()
 
         self._started = 0.0
@@ -354,21 +450,32 @@ class LiveCall:
             return False
         return True
 
+    async def _append(self, kind: str, content: str) -> bool:
+        if len(content) > MAX_APPEND_CHARS:
+            logger.warning("%s too long; clipped", kind, extra=self._log(chars=len(content)))
+            content = content[:MAX_APPEND_CHARS]
+        # Responses mode creates no client delegations: null is general session context (a
+        # non-null id must name a known client delegation).
+        return await self._send({"type": kind, "delegation_id": None, "content": content})
+
     async def _instruct(self, content: str) -> bool:
-        # delegation_id must be null with Responses delegation.
-        return await self._send(
-            {"type": "session.instructions.append", "delegation_id": None, "content": content}
-        )
+        return await self._append("session.instructions.append", content)
 
     async def _commentary(self, content: str) -> bool:
-        return await self._send(
-            {"type": "session.commentary.append", "delegation_id": None, "content": content}
-        )
+        return await self._append("session.commentary.append", content)
 
     async def _thinking(self, content: str) -> bool:
-        return await self._send(
-            {"type": "session.thinking.append", "delegation_id": None, "content": content}
-        )
+        return await self._append("session.thinking.append", content)
+
+    async def _continue_backend(self) -> None:
+        """Send response.create, unless an accepted one is still waiting (it would pick up
+        the new items anyway, and the guide says not to resend it)."""
+        sent_at = self._continuation_sent_at
+        if sent_at is not None and self._now() - sent_at < self._t.continuation_stale:
+            logger.info("response.create already waiting; not resent", extra=self._log())
+            return
+        if await self._send({"type": "response.create"}):
+            self._continuation_sent_at = self._now()
 
     # -- events ---------------------------------------------------------------------------
 
@@ -407,7 +514,10 @@ class LiveCall:
                 extra=self._log(),
             )
         elif kind == "response.event":
-            await self._on_backend_event(event.get("event") or {})
+            delegation_id = event.get("delegation_id")
+            await self._on_backend_event(
+                event.get("event") or {}, delegation_id if isinstance(delegation_id, str) else None
+            )
         elif kind == "session.usage.updated":
             self.usage_seconds = (event.get("usage") or {}).get("seconds", self.usage_seconds)
         elif kind == "error":
@@ -465,6 +575,8 @@ class LiveCall:
 
     async def _on_error(self, error: dict[str, Any]) -> None:
         code = error.get("code")
+        # A refused client event may have been our response.create: do not wait on it.
+        self._continuation_sent_at = None
         logger.warning(
             "Live error %s: %s",
             code,
@@ -475,18 +587,45 @@ class LiveCall:
             # The backend configuration was refused: no function will ever run on this call.
             await self._fail("backend configuration rejected")
 
-    async def _on_backend_event(self, nested: dict[str, Any]) -> None:
+    async def _on_backend_event(self, nested: dict[str, Any], delegation_id: str | None) -> None:
         kind = nested.get("type", "")
-        if kind == "response.output_item.done":
+        response_id = (nested.get("response") or {}).get("id")
+        if kind == "response.created":
+            if isinstance(response_id, str):
+                self._current_response[delegation_id] = response_id
+            # Our waiting response.create (if any) has been taken up.
+            self._continuation_sent_at = None
+            logger.info(
+                "Backend response %s", response_id, extra=self._log(delegation_id=delegation_id)
+            )
+        elif kind == "response.output_item.done":
+            # Lifecycle snapshots have an empty output: completed calls come from here only.
             item = nested.get("item") or {}
             if item.get("type") == "function_call":
-                self._start_function(item)
-        elif kind == "response.completed":
-            self._backend_retries = 0
-        elif kind in ("response.failed", "error"):
-            await self._on_backend_failure(nested)
-        elif kind == "response.incomplete":
-            logger.warning("Backend response incomplete", extra=self._log())
+                self._start_function(item, self._response_for(nested, delegation_id))
+        elif kind in ("response.completed", "response.incomplete", "response.failed", "error"):
+            self._response_finished(response_id)
+            if kind == "response.completed":
+                self._backend_retries = 0
+            elif kind == "response.incomplete":
+                logger.warning("Backend response incomplete", extra=self._log())
+            else:
+                self._continuation_sent_at = None
+                await self._on_backend_failure(nested)
+
+    def _response_for(self, nested: dict[str, Any], delegation_id: str | None) -> PendingResponse:
+        response_id = nested.get("response_id")
+        if not isinstance(response_id, str) or not response_id:
+            response_id = self._current_response.get(delegation_id) or f"unknown:{delegation_id}"
+        pending = self._responses.get(response_id)
+        if pending is None or pending.flushed:
+            pending = PendingResponse(response_id, delegation_id)
+            self._responses[response_id] = pending
+        return pending
+
+    def _response_finished(self, response_id: object) -> None:
+        if isinstance(response_id, str) and response_id in self._responses:
+            self._responses[response_id].completed.set()
 
     async def _on_backend_failure(self, nested: dict[str, Any]) -> None:
         detail = (nested.get("response") or {}).get("error") or nested.get("error") or nested
@@ -495,23 +634,35 @@ class LiveCall:
             return
         if self._backend_retries < MAX_BACKEND_RETRIES:
             self._backend_retries += 1
-            await self._send({"type": "response.create"})
+            await self._continue_backend()
             return
         await self._fail("backend model failed twice")
 
     # -- functions ------------------------------------------------------------------------
 
-    def _start_function(self, item: dict[str, Any]) -> None:
+    def _start_function(self, item: dict[str, Any], pending: PendingResponse) -> None:
         call_id = item.get("call_id")
         if not isinstance(call_id, str) or not call_id or call_id in self._seen_calls:
             return
         self._seen_calls.add(call_id)
         name, raw = str(item.get("name", "")), str(item.get("arguments") or "")
+        pending.outputs[call_id] = None
+        pending.names[call_id] = name
         # A task: transcripts keep flowing while the owner decides.
-        self._spawn(self._run_function(call_id, name, raw))
+        self._spawn(self._run_function(pending, call_id, name, raw))
 
-    async def _run_function(self, call_id: str, name: str, raw: str) -> None:
-        logger.info("Function call %s", name, extra=self._log(function_call_id=call_id))
+    async def _run_function(
+        self, pending: PendingResponse, call_id: str, name: str, raw: str
+    ) -> None:
+        logger.info(
+            "Function call %s",
+            name,
+            extra=self._log(
+                function_call_id=call_id,
+                response_id=pending.response_id,
+                delegation_id=pending.delegation_id,
+            ),
+        )
         try:
             output = await self.execute(name, raw)
         except asyncio.CancelledError:
@@ -519,15 +670,41 @@ class LiveCall:
         except Exception:
             logger.exception("Function %s failed", name, extra=self._log())
             output = FUNCTION_ERROR_OUTPUT
+        pending.outputs[call_id] = output
+        await self._return_outputs(pending)
+
+    async def _return_outputs(self, pending: PendingResponse) -> None:
+        """Once every call of the response has its output: all outputs, then one
+        response.create. Whichever function finishes last sends them."""
+        if pending.flushed or not pending.ready:
+            return
+        if not pending.completed.is_set():
+            # Another call of the same response may still arrive.
+            with suppress(TimeoutError):
+                await asyncio.wait_for(pending.completed.wait(), self._t.response_complete_wait)
+            if pending.flushed or not pending.ready:
+                return
+        pending.flushed = True
+        self._responses.pop(pending.response_id, None)
+        if self._closed.is_set():
+            logger.info(
+                "Session closed; outputs not returned",
+                extra=self._log(response_id=pending.response_id, outputs=list(pending.outputs)),
+            )
+            return
         sent_at = self._now()
-        await self._send(
-            {
-                "type": "response.item.create",
-                "item": {"type": "function_call_output", "call_id": call_id, "output": output},
-            }
-        )
-        await self._send({"type": "response.create"})
-        if name == "end_call" and output == OK_OUTPUT:
+        for call_id, output in pending.outputs.items():
+            await self._send(
+                {
+                    "type": "response.item.create",
+                    "item": {"type": "function_call_output", "call_id": call_id, "output": output},
+                }
+            )
+        await self._continue_backend()
+        if any(
+            pending.names[call_id] == "end_call" and output == OK_OUTPUT
+            for call_id, output in pending.outputs.items()
+        ):
             await self._finish_with_goodbye(self._end_reason or "asistan bitirdi", None, sent_at)
 
     async def execute(self, name: str, raw_arguments: str) -> str:
@@ -535,7 +712,7 @@ class LiveCall:
         model = TOOL_INPUT_MODELS.get(name)
         if model is None:
             logger.warning("Unknown function %r", name, extra=self._log())
-            return f"ERROR: unknown function {name!r}."
+            return unknown_function_output(name)
         try:
             args: BaseModel = model.model_validate_json(raw_arguments or "{}")
         except ValidationError as exc:
@@ -543,8 +720,16 @@ class LiveCall:
                 f"{'.'.join(str(p) for p in err['loc']) or 'arguments'}: {err['msg']}"
                 for err in exc.errors(include_url=False)
             )
-            logger.warning("Invalid %s arguments: %s", name, problems, extra=self._log())
-            return f"ERROR: invalid arguments: {problems}"
+            attempts = self._invalid_attempts.get(name, 0) + 1
+            self._invalid_attempts[name] = attempts
+            logger.warning(
+                "Invalid %s arguments (attempt %d): %s",
+                name,
+                attempts,
+                problems,
+                extra=self._log(),
+            )
+            return invalid_arguments_output(name, problems, may_retry=attempts <= 1)
 
         if isinstance(args, AskOwnerInput):
             return await self._ask_owner(args)
@@ -561,11 +746,14 @@ class LiveCall:
                 self._alert(f"Şüpheli arama: {args.reason}"), self._t.function_timeout
             )
             return OK_OUTPUT
-        return f"ERROR: unknown function {name!r}."
+        return unknown_function_output(name)
 
     async def _ask_owner(self, args: AskOwnerInput) -> str:
         if self._session.message_only:
             return MESSAGE_ONLY_OUTPUT
+        if self._pending_question is not None:
+            # A second parallel ask: one Telegram question per call at a time.
+            return ALREADY_ASKING_OUTPUT
         if self._owner_questions >= self._settings.max_owner_questions:
             logger.warning("ask_owner over the per-call limit; wrapping up", extra=self._log())
             self._spawn(self._finish_with_goodbye("soru sınırı aşıldı", WRAP_UP_INSTRUCTION))
@@ -582,14 +770,27 @@ class LiveCall:
         self._pending_question = args
         self._heard_on_hold = []
         company = asyncio.create_task(self._keep_company(self._now()))
-        try:
-            result = await asyncio.wait_for(
+        # Telegram message + Future, resolved by a button, a free-text reply or the timeout.
+        asking = asyncio.create_task(
+            asyncio.wait_for(
                 self._ask(args), self._settings.hold_timeout_seconds + self._t.ask_margin
             )
-        except TimeoutError:
-            logger.warning("ask_owner did not finish in time", extra=self._log())
-            return owner_timeout_output(self._settings.hold_timeout_seconds)
-        else:
+        )
+        hangup = asyncio.create_task(self._closed.wait())
+        try:
+            await asyncio.wait({asking, hangup}, return_when=asyncio.FIRST_COMPLETED)
+            if not asking.done():
+                # Cancelling the ask edits the Telegram question to "Arayan kapattı"; finish()
+                # sends what was collected.
+                logger.info("Caller hung up on hold", extra=self._log())
+                self.hung_up_on_hold = True
+                return CALLER_HUNG_UP_OUTPUT
+            try:
+                result = asking.result()
+            except TimeoutError:
+                logger.warning("ask_owner did not finish in time", extra=self._log())
+                self._pending_question = None
+                return owner_timeout_output(self._settings.hold_timeout_seconds)
             self._pending_question = None
             if result.timed_out:
                 return owner_timeout_output(self._settings.hold_timeout_seconds)
@@ -598,28 +799,28 @@ class LiveCall:
             partial = self._assembler.partial("caller")
             if partial:
                 heard.append(partial)
-            output = f"OWNER_DECISION: {result.decision_text_en}"
-            if heard:
-                output += "\nCALLER_SAID_DURING_HOLD: " + " / ".join(heard)
-            return output
+            return owner_decision_output(result, heard)
         finally:
-            company.cancel()
-            with suppress(asyncio.CancelledError):
-                await company
+            for task in (asking, hangup, company):
+                task.cancel()
+            await asyncio.gather(asking, hangup, company, return_exceptions=True)
             self._heard_on_hold = None
             if self._session.status is CallStatus.ON_HOLD:
                 self._session.status = CallStatus.IN_PROGRESS
-            if not self._done:
+            if not (self._done or self._closed.is_set()):
                 # Still set only when the call ended during the hold (see finish()).
                 self._pending_question = None
 
     async def _keep_company(self, since: float) -> None:
-        """Never silence on hold: announce the hold if the agent did not, then repeat."""
+        """Never silence on hold: quiet state for the agent, the hold announcement if the
+        agent did not make one, then a few "still trying" lines."""
+        await self._thinking(owner_pending_thinking(0))
         await asyncio.sleep(self._t.hold_announce_after)
         if self._last_output_at < since:
             await self._commentary(HOLD_COMMENTARY)
-        while True:
-            await asyncio.sleep(self._t.hold_phrase_interval)
+        for n in range(1, self._t.hold_still_trying_max + 1):
+            await asyncio.sleep(max(0.0, since + n * self._t.hold_phrase_interval - self._now()))
+            await self._thinking(owner_pending_thinking(self._now() - since))
             await self._commentary(STILL_WAITING_COMMENTARY)
 
     async def _save_message(self, args: SaveMessageInput) -> None:

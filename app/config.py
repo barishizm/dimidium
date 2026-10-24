@@ -115,6 +115,8 @@ class Settings(BaseSettings):
     # Ask "are you still there?" after this much silence from the caller.
     caller_idle_seconds: float = Field(default=12, gt=0)
     hold_phrase_interval_seconds: float = Field(default=20, gt=0)
+    # GPT-Live: "still trying to reach him" lines per hold, one per interval.
+    hold_still_trying_max: int = Field(default=3, ge=0)
     # Your own hold music: 8 kHz mono mu-law (.wav or raw .ulaw). Empty = generated music.
     hold_audio_path: str | None = None
     # ask_owner calls allowed per call; later ones are refused without asking.

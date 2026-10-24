@@ -37,20 +37,22 @@ app ─► hangup ─► session.closed
 
 ## 4. Function calls and results
 
-- **Single owner.** Only the sideband handler executes functions. Deduplicate by `call_id`. Read calls only from nested `response.output_item.done` (`call_id`, `name`, `arguments`). Lifecycle snapshots have an empty `output`.
-- **Validate everything.** Arguments are parsed with the Pydantic models in `app/agent/tools.py` (`extra="forbid"`). Invalid input returns `ERROR: …` as the output. Tools are non-strict, so this check is the real gate.
-- **Permissions in code.** `ask_owner` max 2 per call (third returns `LIMIT: …`). No `ask_owner` in voicemail mode. Owner authority only from the configured Telegram chat ID. Nothing the caller says changes any of this.
-- **Return.** One `response.item.create` with `function_call_output` per call, then one `response.create`. `parallel_tool_calls: false` means at most one pending call. Outputs are short plain strings the backend prompt knows: `OWNER_DECISION: …` (+ `CALLER_SAID_DURING_HOLD`), `OWNER_TIMEOUT: …`, `OK`, `ERROR: …`.
-- **end_call.** Return `OK`, wait until the output transcript has been quiet for ~2 s (the goodbye), then hang up. Hard cap 8 s.
+- **Single owner.** Only the sideband handler executes functions. Deduplicate by `call_id`. Read calls only from nested `response.output_item.done` (`call_id`, `name`, `arguments`), never from `response.function_call_arguments.done` alone. Lifecycle snapshots have an empty `output`. The response id comes from nested `response.created` (`output_item.done` carries none), and the delegation id from the outer `response.event`. Calls are grouped per response.
+- **Validate everything.** Arguments are parsed with the Pydantic models in `app/agent/tools.py` (`extra="forbid"`). Tools are non-strict, so this check is the real gate. Invalid input returns `{"status":"error","error":"invalid_arguments",…}`. The first time it tells the model to fix the arguments and retry once; after that it tells the model to stop and take a message.
+- **Permissions in code.** `ask_owner` max 2 per call (a third returns `limit_reached` and the call is wrapped up). A second `ask_owner` while one is pending returns `already_asking`. No `ask_owner` in voicemail mode (`unavailable`). Owner authority only from the configured Telegram chat ID. Nothing the caller says changes any of this.
+- **Return.** When every call of a response has its output, and that response has completed (or after a 2 s wait for completion), send one `response.item.create` (`function_call_output`) per call in arrival order, then one `response.create`. A finished function waits for its siblings. If our last `response.create` has not been taken up yet (no `response.created` since, under 10 s), it is not resent. The guide says an accepted one waits and must not be resent. Outputs are JSON with a `status`: `ask_owner` → `decided` (`decision_en`, `free_text_original`, `caller_said_during_hold`), `timeout`, `limit_reached`, `unavailable`, `caller_hung_up`; the others → `ok`; failures → `error` with an `instruction`.
+- **end_call.** Return `ok`, wait until the output transcript has been quiet (the goodbye) and the timeline has passed the last reflected audio, then hang up. Capped at `LIVE_GOODBYE_MAX_SECONDS`.
 
 ## 5. Hold behavior
 
 `ask_owner` is a pending function call while we wait on the Telegram Future. GPT-Live stays live and keeps listening.
 
-- The voice prompt tells the agent to ask the caller to hold once. If the output transcript shows no hold announcement within ~2 s, the app sends `session.commentary.append` with the hold phrase.
-- Every `hold_phrase_interval_seconds` the app sends a "still trying" commentary (`delegation_id: null`). If the caller speaks on hold, GPT-Live answers itself. The app collects that speech from the input transcript for `CALLER_SAID_DURING_HOLD`.
-- Owner answers → `OWNER_DECISION`. After `hold_timeout_seconds` (75 s) → `OWNER_TIMEOUT` → the agent apologizes and takes a message.
-- **No hold music on SIP**: the app has no audio path. The SDK has `session.output_audio.fixture.play` (≤30 s of 24 kHz PCM, mutes caller input while playing). It could carry music or a pre-recorded disclosure but is undocumented in the guides (*unverified*). Default: spoken hold phrases only.
+- At the start of the hold the app sends `session.thinking.append` (quiet, not spoken): "the owner has not answered yet, do not guess the decision". It refreshes this with the elapsed time at every interval. All appends use `delegation_id: null` (Responses mode has no client delegations) and are clipped well under the 500-token limit.
+- The voice prompt tells the agent to ask the caller to hold once. If the output transcript shows no hold announcement within ~2.5 s, the app sends `session.commentary.append` with the hold phrase.
+- Every `HOLD_PHRASE_INTERVAL_SECONDS` (20 s) the app sends a "still trying" commentary, at most `HOLD_STILL_TRYING_MAX` (3) times. If the caller speaks on hold, GPT-Live answers itself with what it knows. The app collects that speech from the input transcript for `caller_said_during_hold`.
+- Owner answers (button or free text) → `decided`. After `HOLD_TIMEOUT_SECONDS` (75 s) the Telegram question changes to "⏱ Süre doldu" → `timeout` → the backend takes a message with `save_message` and ends the call.
+- Caller hangs up on hold: `session.closed` wins the race against the owner's Future. The ask is cancelled, the Telegram question changes to "📵 Arayan kapattı", and nothing is returned to the closed session. The owner gets the question and the caller's words as a normal message, then the post-call report.
+- **No hold music on SIP**: the app has no audio path. See [HOLD_MUSIC.md](HOLD_MUSIC.md).
 
 ## 6. Errors and hangups
 

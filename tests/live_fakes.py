@@ -3,6 +3,7 @@
 import asyncio
 import itertools
 from collections.abc import Awaitable, Callable, Coroutine
+from types import SimpleNamespace
 from typing import Any
 
 from app.agent.tools import OwnerOption
@@ -21,6 +22,9 @@ FAST = LiveCallTimings(
     goodbye_start_timeout=0.2,
     hold_announce_after=0.05,
     hold_phrase_interval=0.1,
+    hold_still_trying_max=3,
+    response_complete_wait=0.05,
+    continuation_stale=1.0,
     reconnect_delay=0.01,
     send_wait=0.3,
     closed_wait=0.3,
@@ -53,14 +57,36 @@ def function_call(name: str, arguments: str, call_id: str = "call_1") -> dict[st
         delegation_id=None,
         event={
             "type": "response.output_item.done",
+            "output_index": 0,
             "item": {
                 "type": "function_call",
                 "call_id": call_id,
                 "name": name,
                 "arguments": arguments,
+                "status": "completed",
             },
         },
     )
+
+
+def backend(kind: str, response_id: str, output: list[Any] | None = None) -> dict[str, Any]:
+    """A nested lifecycle event; like the real ones, its snapshot output is empty."""
+    return ev(
+        "response.event",
+        delegation_id=None,
+        event={"type": kind, "response": {"id": response_id, "output": output or []}},
+    )
+
+
+def backend_response(
+    response_id: str, *calls: tuple[str, str, str], complete: bool = True
+) -> list[dict[str, Any]]:
+    """response.created, one output_item.done per (name, arguments, call_id), completed."""
+    events = [backend("response.created", response_id)]
+    events += [function_call(name, args, call_id) for name, args, call_id in calls]
+    if complete:
+        events.append(backend("response.completed", response_id))
+    return events
 
 
 def closed(reason: str = "remote_hangup") -> dict[str, Any]:
@@ -205,6 +231,29 @@ class FakeChannel:
     async def send_ring_alert(self, call_sid: str, text: str, *, offer_forward: bool) -> bool:
         self.ring_alerts.append(text)
         return True
+
+
+class FakeBot:
+    """Telegram bot for the real OwnerChannel: records sent messages and edits."""
+
+    def __init__(self, fail_send: bool = False) -> None:
+        self.sent: list[dict[str, Any]] = []
+        self.edits: list[dict[str, Any]] = []
+        self._next_id = 100
+        self._fail_send = fail_send
+
+    async def send_message(self, chat_id: int, text: str, **kwargs: Any) -> SimpleNamespace:
+        if self._fail_send:
+            raise ConnectionError("telegram down")
+        self._next_id += 1
+        self.sent.append({"chat_id": chat_id, "text": text, "message_id": self._next_id, **kwargs})
+        return SimpleNamespace(message_id=self._next_id)
+
+    async def edit_message_text(self, text: str, **kwargs: Any) -> None:
+        self.edits.append({"text": text, **kwargs})
+
+    async def edit_message_reply_markup(self, **kwargs: Any) -> None:
+        self.edits.append({"text": None, **kwargs})
 
 
 def option_decision(option_id: str = "door") -> OwnerDecision:

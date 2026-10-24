@@ -23,6 +23,16 @@ WEBSOCKET_AUDIO_FORMAT: dict[str, Any] = {"type": "audio/pcm", "rate": 24000}
 
 LIVE_FUNCTION_NAMES = frozenset({"ask_owner", "save_message", "flag_suspicious", "end_call"})
 
+# GPT-Live outputs are JSON (app.live.call), unlike the strings of the shared descriptions.
+LIVE_DESCRIPTIONS = {
+    "ask_owner": (
+        "Ask the owner what to do, via Telegram, while the caller holds. Call this once, after "
+        "you have gathered all information. Waits until the owner answers or the hold times "
+        'out. Returns JSON with "status": "decided" (with decision_en), "timeout", '
+        '"limit_reached", "unavailable" or "caller_hung_up".'
+    ),
+}
+
 
 def function_tools() -> list[dict[str, Any]]:
     """Our four functions as Responses function tools, built from the shared JSON schemas.
@@ -34,7 +44,7 @@ def function_tools() -> list[dict[str, Any]]:
         {
             "type": "function",
             "name": tool["name"],
-            "description": tool["description"],
+            "description": LIVE_DESCRIPTIONS.get(tool["name"], tool["description"]),
             "parameters": tool["input_schema"],
             "strict": False,
         }

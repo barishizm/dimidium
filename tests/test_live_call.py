@@ -18,26 +18,35 @@ from app.live.call import (
     HOLD_COMMENTARY,
     LIMIT_OUTPUT,
     MESSAGE_ONLY_OUTPUT,
+    OK_OUTPUT,
+    STILL_WAITING_COMMENTARY,
     WRAP_UP_INSTRUCTION,
     LiveCall,
     LiveCallTimings,
 )
 from app.models import CallSession, CallStatus
+from app.owner_channel import EXPIRED_TEXT, HUNG_UP_TEXT, OwnerChannel
 from tests.live_fakes import (
     FAST,
     GREETING_LT,
+    FakeBot,
     FakeChannel,
     FakeConnector,
     FakeControl,
     FakeHost,
     FakeLink,
     agent_says,
+    backend,
+    backend_response,
     caller_says,
     closed,
     ev,
     function_call,
     option_decision,
 )
+
+OWNER = 1001
+STRANGER = 2002
 
 ASK_ARGS = json.dumps(
     {
@@ -130,6 +139,17 @@ class Harness:
 
     def outputs(self) -> list[str]:
         return [e["item"]["output"] for e in self.sent("response.item.create")]
+
+    def output_json(self) -> list[dict[str, Any]]:
+        return [json.loads(output) for output in self.outputs()]
+
+    def contents(self, kind: str) -> list[str]:
+        return [e["content"] for e in self.sent(kind)]
+
+    def kinds(self) -> list[str]:
+        """The function-result events in send order."""
+        results = ("response.item.create", "response.create")
+        return [e["type"] for e in self.link.sent if e["type"] in results]
 
     async def stored_turns(self) -> list[tuple[str, str]]:
         async with aiosqlite.connect(self.settings.db_path) as conn:
@@ -260,27 +280,158 @@ async def test_ask_owner_returns_the_decision_and_continues_the_backend(tmp_path
     channel = FakeChannel(option_decision("door"), delay=0.15)
     h = Harness(tmp_path, channel=channel)
     await h.start()
-    h.link.push(agent_says(GREETING_LT), function_call("ask_owner", ASK_ARGS))
+    h.link.push(agent_says(GREETING_LT), *backend_response("resp_1", ("ask_owner", ASK_ARGS, "c1")))
     await until(lambda: channel.asked)
     h.link.push(caller_says("Ar dar ilgai?"))
 
     await until(lambda: h.outputs())
-    assert h.outputs() == [
-        "OWNER_DECISION: Leave it at the door.\nCALLER_SAID_DURING_HOLD: Ar dar ilgai?"
+    assert h.output_json() == [
+        {
+            "status": "decided",
+            "decision_en": "Leave it at the door.",
+            "free_text_original": None,
+            "caller_said_during_hold": ["Ar dar ilgai?"],
+        }
     ]
     item = h.sent("response.item.create")[0]["item"]
-    assert item["type"] == "function_call_output" and item["call_id"] == "call_1"
-    # The continuation follows the output.
-    kinds = [e["type"] for e in h.link.sent]
-    assert kinds.index("response.create") > kinds.index("response.item.create")
+    assert item["type"] == "function_call_output" and item["call_id"] == "c1"
+    assert h.kinds() == ["response.item.create", "response.create"]
     assert h.session.owner_decision == "Leave it at the door."
     assert channel.asked[0]["caller_number"] == "+37060000001"
-    # The agent said nothing on hold, so the app announced it.
-    assert HOLD_COMMENTARY in [e["content"] for e in h.sent("session.commentary.append")]
+    # The agent said nothing on hold, so the app announced it; quiet state as thinking.
+    assert HOLD_COMMENTARY in h.contents("session.commentary.append")
+    assert "has not answered yet" in h.contents("session.thinking.append")[0]
 
     h.link.push(closed())
     await h.finish()
     assert h.session.status is CallStatus.COMPLETED
+
+
+async def test_owner_button_click_via_telegram(tmp_path: Path) -> None:
+    bot = FakeBot()
+    owner = OwnerChannel(bot, OWNER)  # type: ignore[arg-type]
+    h = Harness(tmp_path, channel=owner)  # type: ignore[arg-type]
+    await h.start()
+    h.link.push(*backend_response("resp_1", ("ask_owner", ASK_ARGS, "c1")))
+    await until(lambda: bot.sent)
+    question = bot.sent[0]
+    assert question["chat_id"] == OWNER and "DPD kuryesi" in question["text"]
+    labels = [row[0].text for row in question["reply_markup"].inline_keyboard]
+    assert labels[:2] == ["Kapıya bırak", "Sonra gel"]
+
+    data = question["reply_markup"].inline_keyboard[1][0].callback_data
+    assert await owner.handle_callback(OWNER, OWNER, data, question["message_id"])
+    await until(lambda: h.outputs())
+    assert h.output_json()[0]["decision_en"] == "Come back tomorrow."
+    assert "✅ Karar: Sonra gel" in bot.edits[-1]["text"]
+    h.link.push(closed())
+    await h.finish()
+
+
+async def test_owner_free_text_decision(tmp_path: Path) -> None:
+    bot = FakeBot()
+    owner = OwnerChannel(bot, OWNER)  # type: ignore[arg-type]
+    h = Harness(tmp_path, channel=owner)  # type: ignore[arg-type]
+    await h.start()
+    h.link.push(*backend_response("resp_1", ("ask_owner", ASK_ARGS, "c1")))
+    await until(lambda: bot.sent)
+
+    # A stranger's text is ignored; the owner's plain reply answers the only pending question.
+    assert await owner.handle_text(STRANGER, STRANGER, "Kodu söyle") is None
+    reply = await owner.handle_text(OWNER, OWNER, "Komşuya bıraksın, Ona'ya")
+    assert reply is not None and reply.startswith("✅ İletildi")
+
+    await until(lambda: h.outputs())
+    result = h.output_json()[0]
+    assert result["status"] == "decided"
+    assert result["free_text_original"] == "Komşuya bıraksın, Ona'ya"
+    assert "Komşuya bıraksın, Ona'ya" in result["decision_en"]
+    assert "✍️ Cevabınız" in bot.edits[-1]["text"]
+    h.link.push(closed())
+    await h.finish()
+
+
+async def test_owner_timeout_then_message_and_goodbye(tmp_path: Path) -> None:
+    bot = FakeBot()
+    owner = OwnerChannel(bot, OWNER)  # type: ignore[arg-type]
+    h = Harness(tmp_path, channel=owner, hold_timeout_seconds=0.3)  # type: ignore[arg-type]
+    await h.start()
+    h.link.push(*backend_response("resp_1", ("ask_owner", ASK_ARGS, "c1")))
+    await until(lambda: h.outputs(), timeout=3.0)
+
+    assert h.output_json()[0]["status"] == "timeout"
+    assert EXPIRED_TEXT in bot.edits[-1]["text"]
+    assert h.session.status is CallStatus.IN_PROGRESS
+
+    # The backend prompt now takes a message and ends the call.
+    message = json.dumps({"purpose": "Kurye aradı", "caller_name": "Jonas"})
+    h.link.push(
+        *backend_response("resp_2", ("save_message", message, "c2")),
+        *backend_response("resp_3", ("end_call", json.dumps({"reason": "timeout"}), "c3")),
+    )
+    await until(lambda: h.control.hangups)
+    await h.finish()
+    assert h.output_json()[1:] == [{"status": "ok"}, {"status": "ok"}]
+    stored = await _delivered_messages(h.settings.db_path, h.session.call_sid)
+    assert stored and "Jonas" in stored[0]
+    assert h.call.end_reason() == "asistan bitirdi: timeout"
+
+
+async def test_caller_hanging_up_on_hold_cancels_the_question(tmp_path: Path) -> None:
+    channel = FakeChannel(decision=None)
+    h = Harness(tmp_path, channel=channel)
+    await h.start()
+    h.link.push(*backend_response("resp_1", ("ask_owner", ASK_ARGS, "c1")))
+    await until(lambda: channel.asked)
+    assert h.session.status is CallStatus.ON_HOLD
+    h.link.push(closed("remote_hangup"))
+    await h.finish()
+
+    assert channel.cancelled == 1
+    assert h.call.hung_up_on_hold
+    # Nothing goes back to a closed session.
+    assert h.outputs() == [] and h.sent("response.create") == []
+    assert any(text.startswith("📵 Arayan beklerken kapattı") for text in channel.info)
+
+
+async def test_hangup_on_hold_edits_the_telegram_question(tmp_path: Path) -> None:
+    bot = FakeBot()
+    owner = OwnerChannel(bot, OWNER)  # type: ignore[arg-type]
+    h = Harness(tmp_path, channel=owner)  # type: ignore[arg-type]
+    await h.start()
+    h.link.push(*backend_response("resp_1", ("ask_owner", ASK_ARGS, "c1")))
+    await until(lambda: bot.sent)
+    h.link.push(caller_says("Alio? "), closed("remote_hangup"))
+    await h.finish()
+
+    assert owner.pending_call_sids == []
+    assert HUNG_UP_TEXT in bot.edits[0]["text"]
+    texts = [m["text"] for m in bot.sent[1:]]
+    hung_up = next(t for t in texts if t.startswith("📵 Arayan beklerken kapattı"))
+    assert "DPD kuryesi" in hung_up and "siuntinį" in hung_up
+    # A late click finds the question settled.
+    data = bot.sent[0]["reply_markup"].inline_keyboard[0][0].callback_data
+    answer = await owner.handle_callback(OWNER, OWNER, data, bot.sent[0]["message_id"])
+    assert answer is not None and HUNG_UP_TEXT in answer
+
+
+async def test_hold_lines_are_capped_and_quiet_state_is_updated(tmp_path: Path) -> None:
+    channel = FakeChannel(option_decision("door"), delay=0.6)
+    h = Harness(tmp_path, channel=channel)
+    await h.start()
+    h.link.push(*backend_response("resp_1", ("ask_owner", ASK_ARGS, "c1")))
+    await until(lambda: h.outputs(), timeout=3.0)
+
+    commentary = h.contents("session.commentary.append")
+    # hold_phrase_interval 0.1 s over a 0.6 s hold: still capped at hold_still_trying_max.
+    assert commentary.count(STILL_WAITING_COMMENTARY) == FAST.hold_still_trying_max == 3
+    thinking = h.contents("session.thinking.append")
+    assert len(thinking) == 1 + FAST.hold_still_trying_max
+    assert all("has not answered yet" in text for text in thinking)
+    appends = h.sent("session.commentary.append") + h.sent("session.thinking.append")
+    assert all(e["delegation_id"] is None for e in appends)
+    h.link.push(closed())
+    await h.finish()
 
 
 async def test_same_function_call_id_runs_once(tmp_path: Path) -> None:
@@ -292,50 +443,170 @@ async def test_same_function_call_id_runs_once(tmp_path: Path) -> None:
         function_call("flag_suspicious", args, "call_x"),
     )
     await until(lambda: h.outputs())
-    await asyncio.sleep(0.05)
-    assert h.outputs() == ["OK"]
+    await asyncio.sleep(0.1)
+    assert h.outputs() == [OK_OUTPUT]
+    assert sum("Şüpheli arama" in text for text in h.channel.info) == 1
+    h.link.push(closed())
+    await h.finish()
+
+
+async def test_function_calls_in_lifecycle_snapshots_are_ignored(tmp_path: Path) -> None:
+    h = Harness(tmp_path)
+    await h.start()
+    call = {"type": "function_call", "call_id": "c1", "name": "end_call", "arguments": "{}"}
+    h.link.push(
+        backend("response.created", "resp_1"),
+        ev(
+            "response.event",
+            delegation_id=None,
+            event={"type": "response.function_call_arguments.done", "arguments": "{}"},
+        ),
+        backend("response.completed", "resp_1", output=[call]),
+    )
+    await asyncio.sleep(0.2)
+    assert h.outputs() == [] and h.control.hangups == []
     h.link.push(closed())
     await h.finish()
 
 
 @pytest.mark.parametrize(
-    ("name", "arguments", "expected"),
+    ("name", "arguments", "error"),
     [
-        ("ask_owner", '{"summary_tr": "x"}', "ERROR: invalid arguments"),
-        ("ask_owner", "not json", "ERROR: invalid arguments"),
-        ("end_call", '{"reason": "done", "admin": true}', "ERROR: invalid arguments"),
-        ("transfer_call", "{}", "ERROR: unknown function"),
+        ("ask_owner", '{"summary_tr": "x"}', "invalid_arguments"),
+        ("ask_owner", "not json", "invalid_arguments"),
+        ("end_call", '{"reason": "done", "admin": true}', "invalid_arguments"),
+        ("transfer_call", "{}", "unknown_function"),
     ],
 )
 async def test_invalid_function_calls_are_refused_without_side_effects(
-    tmp_path: Path, name: str, arguments: str, expected: str
+    tmp_path: Path, name: str, arguments: str, error: str
 ) -> None:
     h = Harness(tmp_path)
     await h.start()
-    h.link.push(function_call(name, arguments))
+    h.link.push(*backend_response("resp_1", (name, arguments, "c1")))
     await until(lambda: h.outputs())
 
-    assert h.outputs()[0].startswith(expected)
+    result = h.output_json()[0]
+    assert result["status"] == "error" and result["error"] == error
+    assert h.kinds() == ["response.item.create", "response.create"]
     assert h.channel.asked == []
     assert h.control.hangups == []
     h.link.push(closed())
     await h.finish()
 
 
-async def test_ask_owner_is_capped_and_the_call_wrapped_up(tmp_path: Path) -> None:
+async def test_invalid_arguments_may_be_retried_once(tmp_path: Path) -> None:
+    channel = FakeChannel(option_decision("door"))
+    h = Harness(tmp_path, channel=channel)
+    await h.start()
+    bad = json.dumps({"summary_tr": "x", "caller_said_lt": "y", "options": []})
+    h.link.push(*backend_response("resp_1", ("ask_owner", bad, "c1")))
+    await until(lambda: len(h.outputs()) == 1)
+    h.link.push(*backend_response("resp_2", ("ask_owner", bad, "c2")))
+    await until(lambda: len(h.outputs()) == 2)
+
+    first, second = h.output_json()
+    assert "call ask_owner once more" in first["instruction"]
+    assert "Do not call ask_owner again" in second["instruction"]
+    assert "options" in second["details"]
+    # Refused calls never reached the owner and do not count against the limit.
+    assert channel.asked == []
+    h.link.push(*backend_response("resp_3", ("ask_owner", ASK_ARGS, "c3")))
+    await until(lambda: len(h.outputs()) == 3)
+    assert h.output_json()[2]["status"] == "decided"
+    h.link.push(closed())
+    await h.finish()
+
+
+async def test_two_owner_questions_are_allowed_and_the_third_is_refused(tmp_path: Path) -> None:
     channel = FakeChannel(option_decision("door"))
     h = Harness(tmp_path, channel=channel, max_owner_questions=2)
     await h.start()
     for n in range(3):
-        h.link.push(function_call("ask_owner", ASK_ARGS, f"call_{n}"))
+        h.link.push(*backend_response(f"resp_{n}", ("ask_owner", ASK_ARGS, f"c{n}")))
         await until(lambda n=n: len(h.outputs()) == n + 1)
 
     assert len(channel.asked) == 2
+    assert [r["status"] for r in h.output_json()] == ["decided", "decided", "limit_reached"]
     assert h.outputs()[2] == LIMIT_OUTPUT
+    # One continuation per response.
+    assert len(h.sent("response.create")) == 3
     assert WRAP_UP_INSTRUCTION in h.instructions()
     await until(lambda: h.control.hangups)
     await h.finish()
     assert h.call.end_reason() == "soru sınırı aşıldı"
+
+
+async def test_parallel_second_ask_is_refused_while_the_first_is_pending(tmp_path: Path) -> None:
+    bot = FakeBot()
+    owner = OwnerChannel(bot, OWNER)  # type: ignore[arg-type]
+    h = Harness(tmp_path, channel=owner)  # type: ignore[arg-type]
+    await h.start()
+    h.link.push(
+        *backend_response("resp_1", ("ask_owner", ASK_ARGS, "c1"), ("ask_owner", ASK_ARGS, "c2"))
+    )
+    await until(lambda: bot.sent)
+    await asyncio.sleep(0.1)
+    # The refusal waits for its sibling: nothing is returned while the owner decides.
+    assert h.outputs() == []
+    assert len(bot.sent) == 1
+
+    data = bot.sent[0]["reply_markup"].inline_keyboard[0][0].callback_data
+    await owner.handle_callback(OWNER, OWNER, data, bot.sent[0]["message_id"])
+    await until(lambda: len(h.outputs()) == 2)
+    first, second = h.output_json()
+    assert first["status"] == "decided"
+    assert second["error"] == "already_asking"
+    assert h.kinds() == ["response.item.create", "response.item.create", "response.create"]
+    h.link.push(closed())
+    await h.finish()
+
+
+async def test_all_outputs_go_back_before_one_response_create(tmp_path: Path) -> None:
+    channel = FakeChannel(option_decision("door"), delay=0.2)
+    h = Harness(tmp_path, channel=channel)
+    await h.start()
+    h.link.push(
+        *backend_response(
+            "resp_1",
+            ("flag_suspicious", json.dumps({"reason": "asked for a code"}), "c_flag"),
+            ("ask_owner", ASK_ARGS, "c_ask"),
+        )
+    )
+    # flag_suspicious is done at once, but its output waits for ask_owner.
+    await until(lambda: any("Şüpheli" in text for text in channel.info))
+    await asyncio.sleep(0.1)
+    assert h.outputs() == []
+
+    await until(lambda: h.sent("response.create"))
+    assert h.kinds() == ["response.item.create", "response.item.create", "response.create"]
+    # In the order the calls arrived, each matched by call_id.
+    assert [e["item"]["call_id"] for e in h.sent("response.item.create")] == ["c_flag", "c_ask"]
+    assert [r["status"] for r in h.output_json()] == ["ok", "decided"]
+    h.link.push(closed())
+    await h.finish()
+
+
+async def test_response_create_is_not_resent_while_one_is_waiting(tmp_path: Path) -> None:
+    h = Harness(tmp_path)
+    await h.start()
+    flag = json.dumps({"reason": "spam"})
+    # Two responses back to back; ours is not taken up (no response.created) in between.
+    h.link.push(*backend_response("resp_1", ("flag_suspicious", flag, "c1")))
+    await until(lambda: len(h.outputs()) == 1)
+    h.link.push(
+        function_call("flag_suspicious", flag, "c2"), backend("response.completed", "resp_1")
+    )
+    await until(lambda: len(h.outputs()) == 2)
+    await asyncio.sleep(0.05)
+    assert len(h.sent("response.create")) == 1
+
+    # Once the backend has started the continuation, the next result asks for another.
+    h.link.push(*backend_response("resp_2", ("flag_suspicious", flag, "c3")))
+    await until(lambda: len(h.outputs()) == 3)
+    await until(lambda: len(h.sent("response.create")) == 2)
+    h.link.push(closed())
+    await h.finish()
 
 
 async def test_voicemail_call_never_asks_the_owner(tmp_path: Path) -> None:
@@ -358,7 +629,9 @@ async def test_owner_timeout_tells_the_agent_to_take_a_message(tmp_path: Path) -
     await h.start()
     h.link.push(function_call("ask_owner", ASK_ARGS))
     await until(lambda: h.outputs())
-    assert h.outputs()[0].startswith("OWNER_TIMEOUT: the owner did not answer within 60 seconds")
+    result = h.output_json()[0]
+    assert result["status"] == "timeout" and result["waited_seconds"] == 60
+    assert "save_message" in result["instruction"]
     h.link.push(closed())
     await h.finish()
 
@@ -369,7 +642,7 @@ async def test_save_message_is_stored_and_pushed(tmp_path: Path) -> None:
     args = {"purpose": "Kurye aradı", "caller_name": "Jonas", "callback_number": "+3706"}
     h.link.push(function_call("save_message", json.dumps(args)))
     await until(lambda: h.outputs())
-    assert h.outputs() == ["OK"]
+    assert h.outputs() == [OK_OUTPUT]
     h.link.push(closed())
     await h.finish()
 
@@ -378,19 +651,15 @@ async def test_save_message_is_stored_and_pushed(tmp_path: Path) -> None:
     assert stored and "Kurye aradı" in stored[0]
 
 
-async def test_caller_hanging_up_on_hold_cancels_the_question(tmp_path: Path) -> None:
-    channel = FakeChannel(decision=None)
-    h = Harness(tmp_path, channel=channel)
+async def test_flag_suspicious_alerts_the_owner_at_once(tmp_path: Path) -> None:
+    h = Harness(tmp_path)
     await h.start()
-    h.link.push(function_call("ask_owner", ASK_ARGS))
-    await until(lambda: channel.asked)
-    assert h.session.status is CallStatus.ON_HOLD
-    h.link.push(closed("remote_hangup"))
+    h.link.push(*backend_response("resp_1", ("flag_suspicious", '{"reason": "SMS code"}', "c1")))
+    await until(lambda: h.outputs())
+    assert any(text.startswith("⚠️") and "SMS code" in text for text in h.channel.info)
+    assert h.call.flagged
+    h.link.push(closed())
     await h.finish()
-
-    assert channel.cancelled == 1
-    assert h.call.hung_up_on_hold
-    assert any(text.startswith("📵 Arayan beklerken kapattı") for text in channel.info)
 
 
 # -- ending the call ---------------------------------------------------------------------------
@@ -401,7 +670,7 @@ async def test_end_call_waits_for_the_goodbye_before_hanging_up(tmp_path: Path) 
     h = Harness(tmp_path, timings=timings)
     await h.start()
     h.link.push(function_call("end_call", json.dumps({"reason": "done"})))
-    await until(lambda: h.outputs() == ["OK"])
+    await until(lambda: h.outputs() == [OK_OUTPUT])
 
     # The goodbye is being spoken: no hangup while transcript deltas keep coming.
     for word in ("Ačiū ", "už ", "skambutį. ", "Viso ", "gero!"):
@@ -420,7 +689,7 @@ async def test_hangup_waits_until_the_timeline_passes_the_last_audio(tmp_path: P
     h = Harness(tmp_path)
     await h.start()
     h.link.push(function_call("end_call", json.dumps({"reason": "done"})))
-    await until(lambda: h.outputs() == ["OK"])
+    await until(lambda: h.outputs() == [OK_OUTPUT])
     # Timeline at 1000 ms now; the goodbye audio was generated up to 1400 ms.
     h.link.push(
         ev("session.instructions.appended", start_ms=1000, end_ms=1000),
@@ -502,7 +771,8 @@ async def test_function_output_waits_for_the_reattached_sideband(tmp_path: Path)
     await h.connector.wait_attached(2)
 
     await until(lambda: h.sent("response.item.create", second))
-    assert h.sent("response.item.create", second)[0]["item"]["output"].startswith("OWNER_DECISION")
+    output = h.sent("response.item.create", second)[0]["item"]["output"]
+    assert json.loads(output)["status"] == "decided"
     second.push(closed())
     await h.finish()
 
