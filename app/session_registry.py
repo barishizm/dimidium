@@ -1,4 +1,4 @@
-"""In-memory registry of active calls, keyed by Twilio call SID.
+"""In-memory registry of active calls, keyed by our own call SID (live-...).
 
 This is the only intentional piece of global mutable state in the app.
 """

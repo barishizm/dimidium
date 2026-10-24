@@ -1,7 +1,7 @@
 """Inbound SIP calls: the caller number from the SIP INVITE and the accept/reject decision.
 
 Pure logic, no I/O. The decision:
-- a call from our own Twilio number (a forwarding loop): rejected;
+- a call from our own Telnyx number (a forwarding loop): rejected;
 - denylisted numbers: rejected (busy);
 - server shutting down / too many calls / one number calling too often: rejected;
 - allowlisted numbers: always screened, whatever the mode, and the owner is alerted on ring;

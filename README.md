@@ -8,13 +8,13 @@ relays the decision back to the caller on the same call. See [CLAUDE.md](CLAUDE.
 specification and [docs/GPT_LIVE_DESIGN.md](docs/GPT_LIVE_DESIGN.md) for the design.
 
 > Status: GPT-Live SIP path, Telegram owner channel, call logs and post-call reports built and
-> tested with fakes. Not yet on a real phone call (the Twilio number is still pending; see
-> [docs/SETUP_SIP.md](docs/SETUP_SIP.md)).
+> tested with fakes. Not yet on a real phone call (the Telnyx number is still pending; see
+> [docs/SETUP_TELNYX.md](docs/SETUP_TELNYX.md)).
 
 ## How a call works
 
 ```
-caller -> your mobile (conditional forwarding) -> Twilio number -> Elastic SIP Trunk
+caller -> your mobile (conditional forwarding) -> Telnyx number -> FQDN SIP connection
        -> OpenAI GPT-Live (speech in/out, turn-taking) -> Responses delegation (gpt-6-luna)
                  |                                              |
      webhook: live.transport.incoming            function calls: ask_owner, save_message,
@@ -45,7 +45,7 @@ caller -> your mobile (conditional forwarding) -> Twilio number -> Elastic SIP T
 
 Who gets the agent is decided when the webhook arrives ([app/live/sip.py](app/live/sip.py)):
 
-1. Caller ID is our own `TWILIO_PHONE_NUMBER` (a forwarding loop): rejected.
+1. Caller ID is our own `TELNYX_NUMBER` (a forwarding loop): rejected.
 2. `do_not_answer.deny` in `rules.yaml`: rejected (busy).
 3. Server shutting down, `MAX_CONCURRENT_CALLS` reached, or one number calling more than
    `CALLS_PER_CALLER` times in `CALLS_PER_CALLER_WINDOW_SECONDS`: rejected (busy).
@@ -61,8 +61,8 @@ Who gets the agent is decided when the webhook arrives ([app/live/sip.py](app/li
 ## Requirements
 
 - Python 3.11+
-- For real calls: an OpenAI project with billing, a Twilio number with an Elastic SIP Trunk, a
-  Telegram bot, and a public HTTPS URL ([docs/SETUP_SIP.md](docs/SETUP_SIP.md),
+- For real calls: an OpenAI project with billing, a Telnyx number with an FQDN SIP connection, a
+  Telegram bot, and a public HTTPS URL ([docs/SETUP_TELNYX.md](docs/SETUP_TELNYX.md),
   [docs/SETUP.md](docs/SETUP.md)).
 
 ## Setup
@@ -133,7 +133,7 @@ curl http://localhost:8000/health   # {"status":"ok"}
 On startup the app creates the SQLite database at `DB_PATH` (default `data/dimidium.db`). Every
 call's transcript goes there; a daily cleanup deletes transcripts older than `RETENTION_DAYS`
 (30) and call rows, summaries and messages older than `RECORDS_RETENTION_DAYS` (365). The app
-never receives or stores audio. What OpenAI, Twilio and Telegram get and keep:
+never receives or stores audio. What OpenAI, Telnyx and Telegram get and keep:
 [docs/PRIVACY.md](docs/PRIVACY.md).
 
 ## Test and lint
@@ -145,10 +145,10 @@ ruff check . && black --check .
 
 ## Deployment
 
-Full setup (Twilio number, SIP trunk, OpenAI webhook, call forwarding codes, Telegram bot,
-costs): [docs/SETUP_SIP.md](docs/SETUP_SIP.md) and [docs/SETUP.md](docs/SETUP.md). Check any
-environment with `python scripts/doctor.py` (env vars, OpenAI models, Telegram, Twilio, public
-URL) and `python scripts/check_sip.py` (trunk, origination URI, signed test webhook).
+Full setup (Telnyx number, SIP connection, OpenAI webhook, call forwarding codes, Telegram bot,
+costs): [docs/SETUP_TELNYX.md](docs/SETUP_TELNYX.md) and [docs/SETUP.md](docs/SETUP.md). Check any
+environment with `python scripts/doctor.py` (env vars, OpenAI key and project, signed test
+webhook, public URL, Telegram, and the Telnyx number and connection).
 
 ### The container
 
@@ -202,7 +202,7 @@ below once and tell Claude when you are done so the next step can be verified.
    fly secrets set PUBLIC_BASE_URL=https://<app>.fly.dev OWNER_NAME=... \
      OPENAI_API_KEY=... OPENAI_WEBHOOK_SECRET=... OPENAI_PROJECT_ID=... \
      TELEGRAM_BOT_TOKEN=... TELEGRAM_OWNER_CHAT_ID=... \
-     TWILIO_ACCOUNT_SID=... TWILIO_AUTH_TOKEN=... TWILIO_PHONE_NUMBER=+370...
+     TELNYX_NUMBER=+370...
    # rules.yaml: a base64-encoded secret, written to /srv/config at boot.
    fly secrets set RULES_YAML_B64="$(base64 -i rules.yaml | tr -d '\n')"
    ```
@@ -211,7 +211,7 @@ below once and tell Claude when you are done so the next step can be verified.
    Any other `.env` value (timeouts, limits) goes in the same way or under `[env]`.
 5. `fly deploy`. Then `fly ssh console -C "python scripts/doctor.py"`.
 6. Point the OpenAI project webhook at `https://<app>.fly.dev/openai/webhook`
-   ([docs/SETUP_SIP.md](docs/SETUP_SIP.md), step 3).
+   ([docs/SETUP_TELNYX.md](docs/SETUP_TELNYX.md), step 7).
 
 `fly.toml` already sets `min_machines_running = 1`, `auto_stop_machines = "off"`, a `/health`
 check, `kill_timeout = 30`, and a `shared-cpu-1x` machine with 512 MB.
@@ -261,15 +261,14 @@ from the dashboard (**Manual Deploy**) when no call is active.
 | `app/rate_limit.py` | Sliding-window rate limiter (calls per caller) |
 | `app/config.py` | Settings loaded from `.env` (see `.env.example`) |
 | `app/models.py` | `CallSession` and related data classes |
-| `app/session_registry.py` | In-memory registry of active calls, keyed by call SID |
+| `app/session_registry.py` | In-memory registry of active calls, keyed by our call SID |
 | `app/db.py` | SQLite schema: `calls` (with summary), `transcript_turns`, `messages_for_owner`, `app_state` |
 | `app/logging_setup.py` | JSON logging with phone-number redaction and secret masking |
 | `scripts/live_smoke.py` | One GPT-Live WebSocket session with a recorded caller |
-| `scripts/check_sip.py` | SIP setup check: project, webhook secret, signed test webhook, Twilio trunk |
 | `scripts/check_telegram.py` | Telegram token check, chat ID finder, test message |
-| `scripts/doctor.py` | Whole-setup check (env, OpenAI, Telegram, Twilio, public URL) as a pass/fail table |
-| `docs/SETUP_SIP.md` | OpenAI project, webhook, Twilio SIP trunk, first test call |
-| `docs/SETUP.md` | Twilio number, GSM call forwarding, Telegram bot, cost per minute |
+| `scripts/doctor.py` | Whole-setup check (env, OpenAI, signed webhook, Telegram, Telnyx number and connection, public URL) as a pass/fail table |
+| `docs/SETUP_TELNYX.md` | Telnyx number and SIP connection, OpenAI project and webhook, first test call, troubleshooting |
+| `docs/SETUP.md` | Telnyx number, GSM call forwarding, Telegram bot, cost per minute |
 | `docs/GPT_LIVE_DESIGN.md` | Design: event flow, functions, hold, errors |
 | `docs/PRIVACY.md` | GDPR: who processes what, retention, OpenAI `store` settings, open points |
 | `Dockerfile`, `docker-entrypoint.sh`, `docker-compose.yml` | Container image (non-root) and local compose run |

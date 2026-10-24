@@ -2,7 +2,7 @@
 #
 #   docker build -t dimidium .
 #
-# Audio never passes through this container: Twilio talks SIP to OpenAI directly.
+# Audio never passes through this container: Telnyx talks SIP to OpenAI directly.
 
 FROM python:3.12-slim-bookworm AS build
 

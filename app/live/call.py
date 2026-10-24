@@ -302,7 +302,7 @@ class LiveCall:
         )
         self._guard = PrivateInfoGuard.build(
             settings.private_term_list,
-            [settings.owner_phone_number, settings.twilio_phone_number],
+            [settings.owner_phone_number, settings.telnyx_number],
         )
 
         self._link: SidebandLink | None = None

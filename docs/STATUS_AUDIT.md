@@ -1,5 +1,7 @@
 # Status audit
 
+> **Note (2026-10-24):** this audit is a snapshot from before the switch from Twilio to Telnyx. Its Twilio findings (P0-1, P0-4, A2, A3, A17, the `TWILIO_*` rows) are superseded by [SETUP_TELNYX.md](SETUP_TELNYX.md); `scripts/check_sip.py` and `docs/SETUP_SIP.md` no longer exist. Left unedited as a record.
+
 Date: 2026-10-24. Commit audited: `f052c6d` (main, clean tree). No code was changed for this audit.
 
 Scope: every file under `app/`, `scripts/`, `tests/`, `docs/`, plus `CLAUDE.md`, `README.md`,

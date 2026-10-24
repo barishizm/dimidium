@@ -63,7 +63,8 @@ class Settings(BaseSettings):
     # Signing secret of the project webhook (whsec_...) that receives live.transport.incoming.
     # Without it every incoming-call webhook is refused.
     openai_webhook_secret: SecretStr | None = None
-    # proj_... ID; only used by setup checks (the SIP URI is sip:<project id>@sip.api.openai.com).
+    # proj_... ID; only used by setup checks. It is also the Telnyx "Translated Number" (the SIP
+    # destination is sip:<project id>@sip.api.openai.com:5061;transport=tls).
     openai_project_id: str | None = None
     # Timeout for accept / reject / hangup requests.
     live_control_timeout_seconds: float = Field(default=10, gt=0)
@@ -80,10 +81,12 @@ class Settings(BaseSettings):
     telegram_bot_token: SecretStr | None = None
     telegram_owner_chat_id: int | None = None
 
-    # Twilio
-    twilio_account_sid: str | None = None
-    twilio_auth_token: SecretStr | None = None
-    twilio_phone_number: str | None = None
+    # Telnyx (SIP trunk). The running app never talks to Telnyx; the key is only for the
+    # setup checks in scripts/doctor.py (read-only API calls).
+    telnyx_api_key: SecretStr | None = None
+    # The number callers reach (E.164). Display and sanity checks only: calls from this number
+    # are rejected (forwarding loop) and the agent never says it. Routing is set up at Telnyx.
+    telnyx_number: str | None = None
 
     # Server and abuse limits
     port: int = Field(default=8000, gt=0)
@@ -122,7 +125,7 @@ class Settings(BaseSettings):
             self.openai_api_key,
             self.openai_webhook_secret,
             self.telegram_bot_token,
-            self.twilio_auth_token,
+            self.telnyx_api_key,
         ]
         return [s.get_secret_value() for s in secrets if s is not None and s.get_secret_value()]
 

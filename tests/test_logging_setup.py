@@ -28,8 +28,8 @@ def _format(message: str, secrets: list[str] | None = None) -> str:
 
 
 def test_configured_secrets_are_masked() -> None:
-    out = _format("auth failed for token s3cr3t-twilio-token", ["s3cr3t-twilio-token", "short"])
-    assert "s3cr3t-twilio-token" not in out and "***" in out
+    out = _format("auth failed for token s3cr3t-telnyx-token", ["s3cr3t-telnyx-token", "short"])
+    assert "s3cr3t-telnyx-token" not in out and "***" in out
 
 
 def test_credential_shapes_are_masked_without_configuration() -> None:
@@ -61,5 +61,5 @@ def test_caller_numbers_in_structured_fields_are_masked() -> None:
 def test_secret_values_lists_only_set_secrets() -> None:
     from app.config import Settings
 
-    settings = Settings(_env_file=None, anthropic_api_key="sk-ant-x", twilio_auth_token="tok")
+    settings = Settings(_env_file=None, anthropic_api_key="sk-ant-x", telnyx_api_key="tok")
     assert sorted(settings.secret_values()) == ["sk-ant-x", "tok"]

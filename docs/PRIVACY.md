@@ -13,14 +13,14 @@ OpenAI's [data controls](https://developers.openai.com/api/docs/guides/your-data
 | **OpenAI** (GPT-Live voice session) | The caller's **audio**, both transcripts, the AI's speech, our prompts and the `rules.yaml` summary (no phone numbers) | Session `store: false`: no stored recording (see below). Abuse-monitoring logs up to 30 days unless the project has Zero Data Retention or Modified Abuse Monitoring. |
 | **OpenAI** (Responses backend, delegated by GPT-Live) | The conversation context the voice model hands over, function calls and results (owner decisions) | Responses has 30-day application state by default. The delegation config has **no `store` field**, so we cannot switch it off from the app (see "Open points"). |
 | **OpenAI** (post-call summary) | The stored transcript and call facts | Sent with `store: false`. Abuse-monitoring logs as above. |
-| **Twilio** | Call routing and media between the network and OpenAI (SIP/SRTP), caller ID, call records | Twilio's call logs (CDRs). Keep trunk recording **off** (it is off by default). |
+| **Telnyx** | Call routing and media between the network and OpenAI (SIP/SRTP), caller ID, call records | Telnyx's call detail records. Keep call recording **off** on the number (`python scripts/doctor.py` warns if it is on). |
 | **Telegram** | Owner questions and reports: caller number, summary, what the caller said, messages left | In the owner's Telegram chat until deleted there. Bot chats are cloud chats, not end-to-end encrypted. |
 | **This app** (SQLite on our volume) | Transcripts, call rows (number, times, owner decision, summary, flags), messages for the owner | Transcripts: `RETENTION_DAYS` (30). Call rows, summaries, messages: `RECORDS_RETENTION_DAYS` (365). Daily cleanup. |
 | **Hosting logs** (Fly.io / Render) | JSON logs: call IDs, event types, timings, costs. Phone numbers are masked (`+370******67`), secrets masked, **no transcript text** | Platform log retention. |
 
 ## Audio
 
-- **This app never receives or stores audio.** Twilio sends the call straight to OpenAI over
+- **This app never receives or stores audio.** Telnyx sends the call straight to OpenAI over
   SIP; the app only sees events and transcripts on the sideband.
 - **OpenAI side:** the session config sets `store: false` explicitly
   ([app/live/config.py](../app/live/config.py), tested in `tests/test_live_config.py`). It is
@@ -64,8 +64,8 @@ sqlite3 data/dimidium.db "PRAGMA foreign_keys = ON;
   DELETE FROM calls WHERE caller_number = '+3706XXXXXXX';"   -- transcripts cascade
 ```
 
-Then delete the matching Telegram messages by hand. Twilio call logs can be deleted in the
-Twilio Console or through its API. OpenAI holds no stored session with `store: false`.
+Then delete the matching Telegram messages by hand. Telnyx call records are deleted at Telnyx
+(Mission Control or Telnyx support; how and when is not verified here). OpenAI holds no stored session with `store: false`.
 
 ## Open points (owner decisions)
 

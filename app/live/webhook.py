@@ -1,10 +1,11 @@
 """Incoming GPT-Live SIP calls: the OpenAI project webhook, screening, accept / reject.
 
 OpenAI POSTs `live.transport.incoming` (data.type "sip", data.session_id, data.sip_headers) when
-a call reaches sip:<project id>@sip.api.openai.com. The deprecated `live.call.incoming` is
-handled the same way; `realtime.call.incoming` for the same call is ignored (one handler
-decides). The signature is verified with the project webhook secret (Standard Webhooks:
-webhook-id / webhook-timestamp / webhook-signature, 5-minute tolerance) before anything else.
+a call reaches sip:<project id>@sip.api.openai.com (via the Telnyx trunk, docs/SETUP_TELNYX.md).
+The deprecated `live.call.incoming` and the Realtime `realtime.call.incoming` are acknowledged
+and ignored (one handler decides; the first accept / reject wins). The signature is verified
+with the project webhook secret (Standard Webhooks: webhook-id / webhook-timestamp /
+webhook-signature, 5-minute tolerance) before anything else.
 
 The webhook answers 200 right away; screening, accept and the call itself run in the
 background, so a slow accept never makes OpenAI re-deliver the event. Before the signature
@@ -23,6 +24,7 @@ from openai import AsyncOpenAI, InvalidWebhookSignatureError
 
 from app.answer_mode import AnswerModeStore
 from app.config import Settings
+from app.live.accept_errors import explain_accept_failure
 from app.live.call import CallHost, LiveCall, LiveCallTimings
 from app.live.config import build_sip_accept_body
 from app.live.sip import UNKNOWN_CALLER, caller_number_from_headers, screen_call
@@ -45,7 +47,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/openai", tags=["openai"])
 
-INCOMING_CALL_EVENTS = frozenset({"live.transport.incoming", "live.call.incoming"})
+INCOMING_CALL_EVENT = "live.transport.incoming"
 # Remembered webhook IDs / session IDs for de-duplication.
 _DEDUP_HISTORY = 500
 _MAX_BODY_BYTES = 256 * 1024
@@ -191,7 +193,7 @@ async def openai_webhook(request: Request) -> Response:
     except ValueError:
         return Response(status_code=status.HTTP_400_BAD_REQUEST)
     kind = event.get("type") if isinstance(event, dict) else None
-    if kind not in INCOMING_CALL_EVENTS:
+    if kind != INCOMING_CALL_EVENT:
         logger.info("Ignored OpenAI webhook event %s", kind)
         return Response(status_code=status.HTTP_200_OK)
 
@@ -200,7 +202,7 @@ async def openai_webhook(request: Request) -> Response:
     if not isinstance(session_id, str) or not session_id:
         logger.warning("Incoming-call webhook without data.session_id")
         return Response(status_code=status.HTTP_400_BAD_REQUEST)
-    if data.get("type", "sip") != "sip":
+    if data.get("type") != "sip":
         logger.warning("Ignored incoming transport of type %r", data.get("type"))
         return Response(status_code=status.HTTP_200_OK)
     if deps.claim_session(session_id):
@@ -226,7 +228,7 @@ async def handle_incoming_call(
         rules=deps.rules,
         mode=deps.modes.mode,
         off_mode_action=settings.off_mode_action,
-        own_number=settings.twilio_phone_number,
+        own_number=settings.telnyx_number,
         active_calls=len(CALL_SESSION_REGISTRY),
         max_calls=settings.max_concurrent_calls,
         draining=deps.host.draining,
@@ -260,11 +262,16 @@ async def handle_incoming_call(
     try:
         try:
             await deps.control.accept(session_id, body["session"])
-        except Exception:
-            logger.exception("Accept request failed; the call was not answered", extra=log)
+        except Exception as exc:
+            failure = explain_accept_failure(exc)
+            logger.exception(
+                "Accept request failed; the call was not answered: %s",
+                failure.english,
+                extra={**log, "accept_failure": failure.key},
+            )
             if deps.owner_channel is not None:
                 await deps.owner_channel.send_info(
-                    f"⚠️ Gelen arama cevaplanamadı ({caller}). OpenAI accept isteği başarısız."
+                    f"⚠️ Gelen arama cevaplanamadı ({caller}). {failure.turkish}"
                 )
             return
         logger.info("Incoming SIP call accepted", extra={**log, "mode": str(deps.modes.mode)})

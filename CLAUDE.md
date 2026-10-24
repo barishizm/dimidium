@@ -9,7 +9,7 @@ An AI agent that answers my phone calls when I cannot. Callers are mostly Lithua
 - Code, comments, logs, commit messages, README: English.
 
 ## Architecture
-Caller -> operator conditional call forwarding -> Twilio number -> Twilio Elastic SIP Trunk -> OpenAI GPT-Live (voice model) -> Responses delegation to the backend model.
+Caller -> operator conditional call forwarding -> Telnyx number -> Telnyx FQDN SIP connection (TLS + SRTP) -> OpenAI GPT-Live (voice model) -> Responses delegation to the backend model.
 
 - Voice layer: OpenAI GPT-Live (default model `gpt-live-1`) handles speech in/out, turn-taking and interruptions. We do not run our own STT, TTS or VAD.
 - Backend model: GPT-Live delegates reasoning to a Responses model (default `gpt-6-luna`). The backend model decides what to do and calls our custom functions: `ask_owner`, `save_message`, `flag_suspicious`, `end_call`.
@@ -23,7 +23,7 @@ Owner loop: the backend model calls `ask_owner(summary, options)` -> app validat
 Post-call: transcripts and facts are stored in SQLite, then a Turkish summary is sent to Telegram. The summarizer sits behind an interface; the default implementation calls the backend model via the Responses API (the existing summary module may stay as an alternative implementation).
 
 ### Removed
-Pipecat, Twilio Media Streams, Google/Azure/Deepgram/ElevenLabs STT/TTS providers, the Claude-based agent loop, and the speech benchmark.
+Pipecat, Twilio (replaced by Telnyx), Twilio Media Streams, Google/Azure/Deepgram/ElevenLabs STT/TTS providers, the Claude-based agent loop, and the speech benchmark.
 
 ### Kept
 Telegram owner channel, ask_owner Future mechanism, rules.yaml engine, SQLite call logs, post-call summaries, retention cleanup, Telegram commands, security rules and guards, Docker/deploy configs.
@@ -35,13 +35,13 @@ Telegram owner channel, ask_owner Future mechanism, rules.yaml engine, SQLite ca
   - `LIVE_BACKEND_MODEL` (default `gpt-6-luna`)
   - `LIVE_BACKEND_REASONING_EFFORT` (default `low`)
   - `LIVE_BACKEND_SERVICE_TIER` (optional, unset by default)
-- Twilio Elastic SIP Trunk for telephony.
+- Telnyx SIP trunking (FQDN connection to `sip.api.openai.com:5061`, TLS, SRTP Mandatory) for telephony.
 
 ## Docs (read before any implementation)
 Fetch the `.md` versions, starting from https://developers.openai.com/llms.txt:
 - guides/live, guides/live-conversations, guides/live-delegation, guides/live-prompting, guides/live-migration
 - guides/voice-sip, guides/voice-websockets (live variant), guides/voice-server-controls
-- the GPT-Live partner integration guide for Twilio
+- the Telnyx GPT-Live SIP trunking configuration guide (developers.telnyx.com/docs/voice/sip-trunking/gpt-live-configuration-guide) and guides/live-partner-integrations
 - models/gpt-live-1, models/gpt-6-luna
 - the voice agent evaluation cookbook
 Do not rely on memory for event names or field names; the API is new.
@@ -73,11 +73,12 @@ I am not familiar with some of these services and have NOT set them up yet. Do n
 Items, in the order they usually come up:
 - OpenAI API key with billing enabled (when the agent is first tested against the real models)
 - Telegram bot (create via @BotFather, get token, find my chat ID) when the owner channel is built
-- Twilio account and phone number (including the Lithuanian regulatory bundle question and EU alternatives)
-- Twilio Elastic SIP Trunk pointed at OpenAI's SIP endpoint, when the telephony path is built
-- OpenAI webhook secret and project ID for SIP, when incoming SIP calls are wired up
+- Telnyx account (funded, identity-verified)
+- Lithuanian number purchase at Telnyx and its document verification (about 72 hours)
+- Telnyx SIP connection (FQDN `sip.api.openai.com:5061`, TLS, SRTP Mandatory, Opus/PCMU/PCMA) with the number assigned and its Translated Number set to the OpenAI project ID
+- OpenAI webhook (event `live.transport.incoming`), its signing secret, the project ID, and GPT-Live SIP enabled for the project, when incoming SIP calls are wired up
 - Public webhook URL (ngrok or another public HTTPS URL), when the first live test call is prepared
-- Operator conditional call forwarding to the Twilio number, when deployment/setup docs are written
+- Operator conditional call forwarding to the Telnyx number, when deployment/setup docs are written
 - Deployment target (Render or Fly.io) account and secrets, during deployment
 
 ## Conventions
@@ -92,6 +93,5 @@ Items, in the order they usually come up:
 - lint: ruff check . && black --check .
 - production server (polite shutdown): python -m app.serve
 - container: docker compose up --build
-- whole-setup check: python scripts/doctor.py [--offline]
-- SIP setup check: python scripts/check_sip.py [--offline] (docs/SETUP_SIP.md)
-- TODO after migration: adversarial model tests (real API, needs OPENAI_API_KEY), local test call without Twilio
+- whole-setup check (env, OpenAI, signed webhook, Telegram, Telnyx): python scripts/doctor.py [--offline] (docs/SETUP_TELNYX.md)
+- TODO after migration: adversarial model tests (real API, needs OPENAI_API_KEY), local test call without a phone number

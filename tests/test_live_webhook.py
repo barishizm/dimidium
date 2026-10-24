@@ -75,7 +75,7 @@ def incoming(
     data: dict[str, Any] = {
         "session_id": session_id,
         "sip_headers": [
-            {"name": "From", "value": f'"{caller}" <sip:{caller}@pstn.twilio.com>;tag=1'},
+            {"name": "From", "value": f'"{caller}" <sip:{caller}@sip.telnyx.com>;tag=1'},
             {"name": "To", "value": "<sip:+37060000099@sip.api.openai.com>"},
         ],
     }
@@ -98,7 +98,7 @@ def make_deps(
         owner_name="Test Owner",
         db_path=str(tmp_path / "calls.db"),
         openai_webhook_secret=SecretStr(SECRET),
-        twilio_phone_number=OWN_NUMBER,
+        telnyx_number=OWN_NUMBER,
         **settings,
     )
     connector = FakeConnector(*links)
@@ -244,15 +244,34 @@ def test_redelivered_webhook_is_handled_once(
     assert len(host.spawned) == 1
 
 
-def test_both_event_names_for_one_session_are_decided_once(
+def test_deprecated_event_name_is_ignored_even_when_it_arrives_first(
     route: tuple[TestClient, LiveDeps, SpawnRecorder],
 ) -> None:
     client, _, host = route
-    new = incoming(kind="live.transport.incoming")
     old = incoming(kind="live.call.incoming")
-    client.post("/openai/webhook", content=new, headers=sign(new, msg_id="msg_a"))
-    client.post("/openai/webhook", content=old, headers=sign(old, msg_id="msg_b"))
+    new = incoming(kind="live.transport.incoming")
+    assert (
+        client.post("/openai/webhook", content=old, headers=sign(old, msg_id="a")).status_code
+        == 200
+    )
+    assert host.spawned == []
+    client.post("/openai/webhook", content=new, headers=sign(new, msg_id="b"))
     assert len(host.spawned) == 1
+
+
+@pytest.mark.parametrize("transport_type", [None, "websocket", "webrtc"])
+def test_incoming_transport_must_be_sip(
+    route: tuple[TestClient, LiveDeps, SpawnRecorder], transport_type: str | None
+) -> None:
+    client, _, host = route
+    event = json.loads(incoming())
+    if transport_type is None:
+        del event["data"]["type"]
+    else:
+        event["data"]["type"] = transport_type
+    body = json.dumps(event).encode()
+    assert client.post("/openai/webhook", content=body, headers=sign(body)).status_code == 200
+    assert host.spawned == []
 
 
 def test_other_event_types_are_acknowledged_and_ignored(
@@ -271,7 +290,7 @@ def test_other_event_types_are_acknowledged_and_ignored(
     ("headers", "expected"),
     [
         (
-            [{"name": "From", "value": '"+370 600" <sip:+37060000001@x.twilio.com>;tag=9'}],
+            [{"name": "From", "value": '"+370 600" <sip:+37060000001@sip.telnyx.com>;tag=9'}],
             "+37060000001",
         ),
         ([{"name": "from", "value": "<tel:+37060000001>"}], "+37060000001"),

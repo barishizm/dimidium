@@ -34,12 +34,10 @@ services:
         sync: false
       - key: TELEGRAM_OWNER_CHAT_ID
         sync: false
-      - key: TWILIO_ACCOUNT_SID
+      - key: TELNYX_NUMBER
         sync: false
-      - key: TWILIO_AUTH_TOKEN
-        sync: false
-      - key: TWILIO_PHONE_NUMBER
-        sync: false
+      - key: TELNYX_API_KEY
+        sync: false   # optional, only for scripts/doctor.py
       # Upload rules.yaml as a Secret File (Environment tab).
       - key: RULES_PATH
         value: /etc/secrets/rules.yaml
