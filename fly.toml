@@ -1,7 +1,7 @@
 # Fly.io: one always-on machine in Europe. See README "Deployment" and docs/SETUP.md.
 #   fly launch --no-deploy --copy-config   (pick a unique app name, keep this file)
 #   fly volumes create dimidium_data --region arn --size 1
-#   fly secrets set ANTHROPIC_API_KEY=... TELEGRAM_BOT_TOKEN=... (see README)
+#   fly secrets set OPENAI_API_KEY=... TELEGRAM_BOT_TOKEN=... (see README)
 #   fly deploy
 
 app = "dimidium-jarvis"   # change to your own unique name
@@ -11,10 +11,6 @@ primary_region = "arn"
 # SIGTERM -> active calls hear a goodbye (SHUTDOWN_GRACE_SECONDS, 20 s) -> exit.
 kill_signal = "SIGTERM"
 kill_timeout = 30
-
-[build]
-  [build.args]
-    EXTRAS = "google"   # "google,azure" if you use Azure Speech
 
 [deploy]
   # One machine with a volume is replaced in place, never overlapped (two copies would both
@@ -26,7 +22,6 @@ kill_timeout = 30
   PORT = "8000"
   LOG_LEVEL = "INFO"
   RULES_PATH = "/srv/config/rules.yaml"
-  GOOGLE_APPLICATION_CREDENTIALS = "/srv/config/google.json"
 
 [http_service]
   internal_port = 8000
@@ -56,12 +51,9 @@ kill_timeout = 30
 # Files written at boot from secrets (the secret value must be base64, see README).
 # Uncomment after setting the secret; a missing secret fails the deploy.
 # [[files]]
-#   guest_path = "/srv/config/google.json"
-#   secret_name = "GOOGLE_CREDENTIALS_B64"
-# [[files]]
 #   guest_path = "/srv/config/rules.yaml"
 #   secret_name = "RULES_YAML_B64"
 
 [[vm]]
   size = "shared-cpu-1x"
-  memory = "1gb"
+  memory = "512mb"

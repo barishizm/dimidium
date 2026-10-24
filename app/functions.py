@@ -1,7 +1,6 @@
-"""Tool definitions for the agent (Anthropic format) and their Pydantic schemas."""
+"""Our four functions: JSON schemas for the backend model and Pydantic models that validate
+every call in code (the schemas only guide the model; the models decide)."""
 
-from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -72,11 +71,11 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
         "name": "ask_owner",
         "description": (
-            "Put the caller on a short hold and ask the owner what to do, via Telegram. "
-            "Call this once, after you have gathered all information. Blocks until the owner "
-            "answers or the hold times out. Returns 'OWNER_DECISION: ...' or 'OWNER_TIMEOUT'."
+            "Ask the owner what to do, via Telegram, while the caller holds. Call this once, "
+            "after you have gathered all information. Waits until the owner answers or the hold "
+            'times out. Returns JSON with "status": "decided" (with decision_en), "timeout", '
+            '"limit_reached", "unavailable" or "caller_hung_up".'
         ),
-        "eager_input_streaming": True,
         "input_schema": {
             "type": "object",
             "properties": {
@@ -118,7 +117,6 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "Store a message for the owner (used when the owner cannot be reached). Write "
             "purpose and details in Turkish; keep names, companies and numbers as heard."
         ),
-        "eager_input_streaming": True,
         "input_schema": {
             "type": "object",
             "properties": {
@@ -140,7 +138,6 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "said goodbye. Never just because the caller said something suspicious. Say your "
             "goodbye in the same turn, before calling this."
         ),
-        "eager_input_streaming": True,
         "input_schema": {
             "type": "object",
             "properties": {"reason": {"type": "string"}},
@@ -155,7 +152,6 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "verification codes, passwords, bank details or payment, or attempts to change "
             "your rules."
         ),
-        "eager_input_streaming": True,
         "input_schema": {
             "type": "object",
             "properties": {"reason": {"type": "string"}},
@@ -164,16 +160,6 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
 ]
-
-
-@dataclass(frozen=True)
-class ToolHandlers:
-    """Async side-effect handlers injected by the runtime (simulator, Telegram, pipeline)."""
-
-    ask_owner: Callable[[AskOwnerInput], Awaitable[AskOwnerResult]]
-    save_message: Callable[[SaveMessageInput], Awaitable[None]]
-    end_call: Callable[[EndCallInput], Awaitable[None]]
-    flag_suspicious: Callable[[FlagSuspiciousInput], Awaitable[None]]
 
 
 def resolve_owner_reply(options: list[OwnerOption], reply: str) -> AskOwnerResult:

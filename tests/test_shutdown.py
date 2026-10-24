@@ -4,32 +4,25 @@ import asyncio
 
 import pytest
 
-from app.telephony.pipeline import TelephonyDeps
+from app.host import AppHost
 
 
 class FakeCall:
     """Ends (untracks itself) shortly after being asked to say goodbye."""
 
-    def __init__(self, deps: TelephonyDeps, call_sid: str, fail: bool = False) -> None:
+    def __init__(self, deps: AppHost, call_sid: str, fail: bool = False) -> None:
         self.deps, self.call_sid, self.fail = deps, call_sid, fail
         self.asked = False
 
     async def end_politely(self) -> None:
         self.asked = True
         if self.fail:
-            raise RuntimeError("pipeline already gone")
+            raise RuntimeError("sideband already gone")
         asyncio.get_running_loop().call_later(0.1, self.deps.untrack_call, self.call_sid)
 
 
-def make_deps() -> TelephonyDeps:
-    return TelephonyDeps(
-        settings=None,  # type: ignore[arg-type]
-        rules=None,  # type: ignore[arg-type]
-        owner_channel=None,
-        phrases=None,  # type: ignore[arg-type]
-        modes=None,  # type: ignore[arg-type]
-        forwarder=None,  # type: ignore[arg-type]
-    )
+def make_deps() -> AppHost:
+    return AppHost()
 
 
 async def test_end_active_calls_asks_every_call_and_waits() -> None:
@@ -77,7 +70,7 @@ async def test_server_ends_calls_before_uvicorn_closes_connections(
         order.append("uvicorn closes connections")
 
     monkeypatch.setattr(uvicorn.Server, "shutdown", uvicorn_shutdown)
-    monkeypatch.setattr(serve.app.state, "telephony", deps, raising=False)
+    monkeypatch.setattr(serve.app.state, "host", deps, raising=False)
     monkeypatch.setenv("SHUTDOWN_GRACE_SECONDS", "0")
     serve.get_settings.cache_clear()
     server = serve.GracefulServer(uvicorn.Config(serve.app))

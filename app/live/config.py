@@ -7,8 +7,8 @@ details differ. Field names follow openai.types.live.SessionConfigParam / Sessio
 
 from typing import Any, Literal
 
-from app.agent.tools import TOOL_DEFINITIONS
 from app.config import Settings
+from app.functions import TOOL_DEFINITIONS
 from app.live.prompts import (
     VOICE_PROMPT,
     build_backend_prompt,
@@ -23,28 +23,18 @@ WEBSOCKET_AUDIO_FORMAT: dict[str, Any] = {"type": "audio/pcm", "rate": 24000}
 
 LIVE_FUNCTION_NAMES = frozenset({"ask_owner", "save_message", "flag_suspicious", "end_call"})
 
-# GPT-Live outputs are JSON (app.live.call), unlike the strings of the shared descriptions.
-LIVE_DESCRIPTIONS = {
-    "ask_owner": (
-        "Ask the owner what to do, via Telegram, while the caller holds. Call this once, after "
-        "you have gathered all information. Waits until the owner answers or the hold times "
-        'out. Returns JSON with "status": "decided" (with decision_en), "timeout", '
-        '"limit_reached", "unavailable" or "caller_hung_up".'
-    ),
-}
-
 
 def function_tools() -> list[dict[str, Any]]:
     """Our four functions as Responses function tools, built from the shared JSON schemas.
 
     Not strict: save_message has optional fields, and every call is validated in code with the
-    Pydantic models in app.agent.tools anyway.
+    Pydantic models in app.functions anyway.
     """
     tools = [
         {
             "type": "function",
             "name": tool["name"],
-            "description": LIVE_DESCRIPTIONS.get(tool["name"], tool["description"]),
+            "description": tool["description"],
             "parameters": tool["input_schema"],
             "strict": False,
         }

@@ -20,7 +20,6 @@ RULES = RulesConfig.model_validate(
                     "number": "+37060000001",
                     "name": "Agate",
                     "alert_tr": "Agate arıyor",
-                    "offer_forward": True,
                 }
             ],
             "deny": [{"number": "+37060000009", "note": "spam"}],
@@ -109,7 +108,7 @@ async def test_messages_shows_undelivered_once(commands: OwnerCommands, db_path:
 
 async def test_rules_masks_numbers(commands: OwnerCommands) -> None:
     reply = await commands.handle("/rules")
-    assert "Agate …001" in reply and "yönlendirme teklif edilir" in reply
+    assert "Agate …001" in reply
     assert "…009 spam" in reply and "Mom (family) …002" in reply
     assert "+3706" not in reply
     assert "sesli mesaj" in reply

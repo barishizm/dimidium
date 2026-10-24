@@ -22,10 +22,10 @@ from app.live.sip import UNKNOWN_CALLER, caller_number_from_headers, screen_call
 from app.live.transcript import TranscriptAssembler, disclosure_spoken
 from app.live.webhook import LiveDeps, handle_incoming_call
 from app.live.webhook import router as live_router
+from app.phrases_lt import PHRASES_BY_KEY
 from app.rate_limit import SlidingWindowLimiter
 from app.rules import RulesConfig, RulesEngine
 from app.session_registry import CALL_SESSION_REGISTRY
-from app.speech.phrases_lt import PHRASES_BY_KEY
 from tests.live_fakes import (
     FAST,
     FakeChannel,

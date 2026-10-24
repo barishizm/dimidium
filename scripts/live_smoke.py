@@ -10,7 +10,7 @@ Usage:
   python scripts/live_smoke.py --audio caller.wav [--owner-reply "Leave it at the door."]
   python scripts/live_smoke.py --audio caller.wav --owner-timeout --save-output agent.wav
 
-Needs OPENAI_API_KEY in .env and the audio extras: pip install -e ".[bench]".
+Needs OPENAI_API_KEY in .env and the audio extras: pip install -e ".[audio]".
 The recording is streamed in real time (20 ms frames), then silence for --tail seconds; the
 session ends on end_call, after the tail, or on Ctrl+C.
 """
@@ -30,8 +30,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pydantic import ValidationError  # noqa: E402
 
-from app.agent.tools import TOOL_INPUT_MODELS  # noqa: E402
 from app.config import Settings, get_settings  # noqa: E402
+from app.functions import TOOL_INPUT_MODELS, AskOwnerResult  # noqa: E402
+from app.live.call import (  # noqa: E402
+    LIMIT_OUTPUT,
+    OK_OUTPUT,
+    invalid_arguments_output,
+    owner_decision_output,
+    owner_timeout_output,
+    unknown_function_output,
+)
 from app.live.config import build_session_config, resolve_greeting  # noqa: E402
 from app.live.prompts import greeting_instruction  # noqa: E402
 from app.rules import RulesEngine  # noqa: E402
@@ -42,11 +50,6 @@ FRAME_BYTES = SAMPLE_RATE * 2 * FRAME_MS // 1000
 CLOSE_TIMEOUT_SECONDS = 15
 # Time for the goodbye to be spoken after end_call before the session is closed.
 GOODBYE_GRACE_SECONDS = 5
-
-OWNER_TIMEOUT_RESULT = (
-    "OWNER_TIMEOUT: the owner did not answer. Apologize, take a message with "
-    "save_message, then say goodbye and call end_call."
-)
 
 
 def load_pcm24k(path: Path) -> bytes:
@@ -208,23 +211,22 @@ class SmokeCall:
         """Validate like the app will, then simulate the side effect."""
         model = TOOL_INPUT_MODELS.get(name)
         if model is None:
-            return f"ERROR: unknown function {name!r}."
+            return unknown_function_output(name)
         try:
             model.model_validate_json(raw_arguments or "{}")
         except ValidationError as exc:
-            return f"ERROR: invalid arguments: {exc.errors(include_url=False)}"
-        if name != "ask_owner":
-            return "OK"
-        if self._owner_questions >= self._settings.max_owner_questions:
-            return (
-                "LIMIT: the owner was already asked. Use the decision you have, or take a "
-                "message with save_message."
+            return invalid_arguments_output(
+                name, str(exc.errors(include_url=False)), may_retry=True
             )
+        if name != "ask_owner":
+            return OK_OUTPUT
+        if self._owner_questions >= self._settings.max_owner_questions:
+            return LIMIT_OUTPUT
         self._owner_questions += 1
         await asyncio.sleep(self._args.owner_delay)
         if self._args.owner_timeout:
-            return OWNER_TIMEOUT_RESULT
-        return f"OWNER_DECISION: {self._args.owner_reply}"
+            return owner_timeout_output(self._settings.hold_timeout_seconds)
+        return owner_decision_output(AskOwnerResult(decision_text_en=self._args.owner_reply), [])
 
     def save_output(self) -> None:
         if not self._args.save_output:

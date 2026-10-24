@@ -2,8 +2,8 @@
 
     python -m app.serve
 
-On SIGTERM (deploy, restart, scale-down) plain uvicorn closes every WebSocket at once, before
-the app's lifespan shutdown runs, so callers would hear the line go dead. Here the server first
+On SIGTERM (deploy, restart, scale-down) plain uvicorn shuts down before the app's lifespan
+cleanup can end calls, so the sideband of every call would drop mid-sentence. Here the server first
 marks itself draining (new calls are refused, /health returns 503), lets every active call say
 "sorry, we have to end the call, I will pass everything on, goodbye", waits up to
 SHUTDOWN_GRACE_SECONDS for those calls to end, and only then lets uvicorn close connections.
@@ -16,8 +16,8 @@ import socket
 import uvicorn
 
 from app.config import get_settings
+from app.host import AppHost
 from app.main import app
-from app.telephony.pipeline import TelephonyDeps
 
 # Seconds uvicorn waits for remaining connections after the calls have ended.
 _UVICORN_GRACE_SECONDS = 5
@@ -25,9 +25,9 @@ _UVICORN_GRACE_SECONDS = 5
 
 class GracefulServer(uvicorn.Server):
     async def shutdown(self, sockets: list[socket.socket] | None = None) -> None:
-        deps: TelephonyDeps | None = getattr(app.state, "telephony", None)
-        if deps is not None and not self.force_exit:
-            await deps.end_active_calls(get_settings().shutdown_grace_seconds)
+        host: AppHost | None = getattr(app.state, "host", None)
+        if host is not None and not self.force_exit:
+            await host.end_active_calls(get_settings().shutdown_grace_seconds)
         await super().shutdown(sockets)
 
 
@@ -38,7 +38,7 @@ def main() -> None:
         host="0.0.0.0",
         port=settings.port,
         # Fly/Render terminate TLS and set X-Forwarded-For; the per-IP rate limit needs the
-        # real client address. The signature check uses PUBLIC_BASE_URL, not these headers.
+        # real client address.
         proxy_headers=True,
         forwarded_allow_ips="*",
         timeout_graceful_shutdown=_UVICORN_GRACE_SECONDS,

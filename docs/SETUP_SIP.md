@@ -50,7 +50,12 @@ at once.
 ## 2. Public HTTPS URL
 
 OpenAI must reach `https://<your url>/openai/webhook`. For local tests this is your ngrok
-static domain (already set up, see [live_call_test.md](live_call_test.md) step 1):
+static domain:
+
+1. Sign up at <https://ngrok.com> (free plan) and install it: `brew install ngrok`.
+2. Dashboard → **Your Authtoken** → copy it, then run `ngrok config add-authtoken <token>`.
+3. Dashboard → **Domains** → claim your free static domain (`<name>.ngrok-free.dev`).
+4. Start the tunnel to the app's port:
 
 ```bash
 ngrok http --url=<your-domain>.ngrok-free.dev 8000

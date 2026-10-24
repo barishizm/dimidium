@@ -34,11 +34,11 @@ from app.live.transport import (
 )
 from app.models import CallSession
 from app.owner_channel import OwnerChannel
+from app.phrases_lt import PHRASES_BY_KEY
 from app.post_call import CallSummarizer
 from app.rate_limit import SlidingWindowLimiter
 from app.rules import RulesEngine
 from app.session_registry import CALL_SESSION_REGISTRY
-from app.speech.phrases_lt import PHRASES_BY_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -235,9 +235,9 @@ async def handle_incoming_call(
             return
         logger.info("Incoming SIP call accepted", extra={**log, "mode": str(deps.modes.mode)})
         if screening.ring_alert and deps.owner_channel is not None:
-            # In the background: the sideband must attach right away. No forward button on
-            # SIP: the call stays on one leg with the agent.
-            deps.host.spawn(_ring_alert(deps.owner_channel, session.call_sid, screening.ring_alert))
+            # In the background: the sideband must attach right away. No transfer: the call
+            # stays on one leg with the agent.
+            deps.host.spawn(deps.owner_channel.send_ring_alert(screening.ring_alert))
         call = LiveCall(
             session,
             settings=settings,
@@ -251,7 +251,3 @@ async def handle_incoming_call(
         await call.run()
     finally:
         CALL_SESSION_REGISTRY.remove(session.call_sid)
-
-
-async def _ring_alert(channel: OwnerChannel, call_sid: str, text: str) -> None:
-    await channel.send_ring_alert(call_sid, text, offer_forward=False)

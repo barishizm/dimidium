@@ -1,7 +1,7 @@
 """Inbound SIP calls: the caller number from the SIP INVITE and the accept/reject decision.
 
-Pure logic, no I/O. The decision mirrors the Twilio voice webhook (app/telephony/routes.py):
-- a call from our own Twilio number (a forward that looped back): rejected;
+Pure logic, no I/O. The decision:
+- a call from our own Twilio number (a forwarding loop): rejected;
 - denylisted numbers: rejected (busy);
 - server shutting down / too many calls / one number calling too often: rejected;
 - allowlisted numbers: always screened, whatever the mode, and the owner is alerted on ring;
@@ -84,7 +84,7 @@ def screen_call(
 ) -> Screening:
     known_caller = caller != UNKNOWN_CALLER
     if known_caller and own_number and normalize_number(caller) == normalize_number(own_number):
-        return Screening("reject", "call from our own number (forward loop)")
+        return Screening("reject", "call from our own number (forwarding loop)")
     if known_caller and rules.is_blocked(caller):
         return Screening("reject", "denylisted caller")
     if draining:

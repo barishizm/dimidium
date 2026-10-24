@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from app.speech.phrases_lt import PHRASES
+from app.phrases_lt import PHRASES
 
 REVIEW_DOC = Path(__file__).resolve().parents[1] / "docs" / "REVIEW_LT.md"
 

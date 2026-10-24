@@ -131,7 +131,7 @@ def test_allow_and_deny_lists() -> None:
             {
                 "known_numbers": [{"number": "+37060000001", "name": "Old entry"}],
                 "do_not_answer": {
-                    "allow": [{"number": "860000001", "name": "Agate", "offer_forward": True}],
+                    "allow": [{"number": "860000001", "name": "Agate"}],
                     "deny": [{"number": "+37060000009"}, {"number": "+37060000001"}],
                 },
             }

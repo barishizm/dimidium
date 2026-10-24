@@ -2,13 +2,13 @@
 
 From "nothing set up" to calls on your mobile being answered by Jarvis. Work through the
 sections in order. Deployment (Fly.io or Render) is in the README under
-[Deployment](../README.md#deployment). For a first test on your laptop with ngrok, see
-[live_call_test.md](live_call_test.md).
+[Deployment](../README.md#deployment). The SIP trunk, the OpenAI webhook and a first test
+call on your laptop with ngrok are in [SETUP_SIP.md](SETUP_SIP.md).
 
 | Step | You get | `.env` variables |
 | --- | --- | --- |
 | [1. Twilio number](#1-twilio-number) | A phone number that can run the agent | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_PHONE_NUMBER` |
-| [2. Voice webhook](#2-voice-webhook) | Calls to that number reach the app | `PUBLIC_BASE_URL` |
+| [2. SIP trunk and webhook](#2-sip-trunk-and-openai-webhook) | Calls to that number reach GPT-Live and the app | `OPENAI_*`, `PUBLIC_BASE_URL` |
 | [3. Call forwarding](#3-gsm-conditional-call-forwarding) | Calls you miss go to that number | none (set on your phone) |
 | [4. Telegram bot](#4-telegram-bot) | The agent can ask you, and you can answer | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_OWNER_CHAT_ID` |
 | [5. Costs](#5-cost-per-call-minute) | What each minute costs | none |
@@ -31,9 +31,9 @@ fly ssh console -C "python scripts/doctor.py"   # on Fly.io (Render: Shell tab)
    add funds with a card. On a trial account, callers first hear a trial notice and only
    numbers you verified can call in. A trial account cannot carry real forwarded calls.
 3. Console home → **Account Info**: copy **Account SID** into `TWILIO_ACCOUNT_SID` and
-   **Auth Token** (click *Show*) into `TWILIO_AUTH_TOKEN`. The Auth Token also signs every
-   webhook. If it leaks, rotate it in Console → Account → API keys & tokens and update
-   `.env` and your deployment secrets.
+   **Auth Token** (click *Show*) into `TWILIO_AUTH_TOKEN`. The setup checks use it to read
+   your trunk; the running app does not need it. If it leaks, rotate it in Console → Account →
+   API keys & tokens and update `.env`.
 
 ### 1.2 Buying a number
 
@@ -55,8 +55,8 @@ approved. The address and ID stay at Twilio; nothing of it is used by this app.
 | --- | --- | --- |
 | A **US local number** (no bundle) | Instant, about $1.15/month, cheap inbound minutes | Your Lithuanian operator charges every forwarded call as an **international call** (see 3.4). Usually the most expensive option per minute. |
 | Another **EU country's number** (Estonia, Latvia, ...) | Still in the EU | Most also need a bundle; forwarding to it is international too |
-| **Another provider** (Telnyx, Vonage, Zadarma, a local SIP operator) with Lithuanian numbers | Sometimes simpler paperwork, EU media | The app is Twilio-specific (TwiML, Media Streams, signature check). Pipecat has serializers for Telnyx and Plivo, but switching needs code changes. |
-| **No number yet** | Free | `scripts/fake_twilio_call.py` tests the full pipeline without Twilio ([live_call_test.md](live_call_test.md) step 0) |
+| **Another provider** (Telnyx, Vonage, Zadarma, a local SIP operator) with Lithuanian numbers | Sometimes simpler paperwork, EU media | Untested. Any SIP trunk that can send calls to `sip:<project>@sip.api.openai.com` over TLS with SRTP should work; the app itself never talks to Twilio during a call. |
+| **No number yet** | Free | `scripts/live_smoke.py` runs the agent over a WebSocket with a recorded caller ([SETUP_SIP.md](SETUP_SIP.md)) |
 
 Recommendation: a Lithuanian number with a bundle. Forwarding to it is a domestic call
 (usually included in your plan), and callers never see a foreign number.
@@ -64,46 +64,25 @@ Recommendation: a Lithuanian number with a bundle. Forwarding to it is a domesti
 ### 1.3 Check
 
 ```bash
-python scripts/check_twilio.py   # credentials, number on the account, webhook, tunnel
+python scripts/doctor.py      # credentials, number on the account
+python scripts/check_sip.py   # trunk, origination URI, number attached, webhook
 ```
 
 ---
 
-## 2. Voice webhook
+## 2. SIP trunk and OpenAI webhook
 
-Twilio asks the app what to do with each call by POSTing to `https://<domain>/twilio/voice`.
-`<domain>` is your deployment (`<app>.fly.dev`, `<service>.onrender.com`, your own domain,
-or the ngrok domain during local tests).
-
-1. Set `PUBLIC_BASE_URL=https://<domain>` in the app's environment, with no trailing slash
-   and no path. It must be **exactly** the URL Twilio calls: the app checks Twilio's
-   signature against it, and a mismatch rejects every call with 403.
-2. Console → **Phone Numbers → Manage → Active numbers** → click your number → **Configure**.
-3. Under **Voice Configuration**:
-   - *Configure with*: **Webhook, TwiML Bin, Function, Studio Flow, Proxy Service**
-   - *A call comes in*: **Webhook**, URL `https://<domain>/twilio/voice`, method **HTTP POST**
-   - *Primary handler fails* (optional, recommended): a TwiML Bin with
-     `<Response><Say language="lt-LT">Atsiprašome, šiuo metu negalime atsiliepti.</Say></Response>`,
-     so callers hear something if the app is down (have the text checked by a native speaker).
-   - Leave *Call status changes* empty.
-4. **Save configuration**.
-
-Or let the script set it from `PUBLIC_BASE_URL`:
-
-```bash
-python scripts/check_twilio.py --set-webhook
-```
-
-Media goes over a WebSocket to `wss://<domain>/twilio/stream`. The app builds that URL from
-`PUBLIC_BASE_URL`; there is nothing to configure in Twilio for it.
+Calls go from your Twilio number over an Elastic SIP Trunk straight to OpenAI GPT-Live. OpenAI
+then tells the app about the call with a signed webhook to `https://<domain>/openai/webhook`,
+and the app accepts it and follows it over a sideband WebSocket. Audio never passes through
+the app. The step-by-step setup is in [SETUP_SIP.md](SETUP_SIP.md).
 
 Security, all on by default:
 
-- Requests without a valid `X-Twilio-Signature` are rejected (`TWILIO_VALIDATE_SIGNATURE=true`;
-  never turn it off on a public server).
-- The media stream only accepts the one-time token from the app's own TwiML.
-- Rate limits on `/twilio/voice`: `VOICE_REQUESTS_PER_IP_PER_MINUTE` per IP (HTTP 429), at most
-  `CALLS_PER_CALLER` calls per number within `CALLS_PER_CALLER_WINDOW_SECONDS` (busy signal;
+- Webhooks without a valid OpenAI signature (`OPENAI_WEBHOOK_SECRET`, 5-minute tolerance) are
+  rejected before anything else; re-deliveries are ignored.
+- Rate limits: at most `CALLS_PER_CALLER` calls per number within
+  `CALLS_PER_CALLER_WINDOW_SECONDS` (busy;
   numbers in `do_not_answer.allow` are exempt), and `MAX_CONCURRENT_CALLS` at once (busy).
   Callers with a hidden number share one limit.
 
@@ -193,7 +172,7 @@ treated as the owner; messages from anyone else are ignored.
 
    Put it into `TELEGRAM_OWNER_CHAT_ID`, then run the script again: it sends a test message.
 
-Only one process may receive the bot's updates. Stop the local app (or the simulator) when
+Only one process may receive the bot's updates. Stop the local app when
 the deployed app is running, or you will see `Conflict: terminated by other getUpdates`
 errors in the logs.
 
@@ -201,37 +180,34 @@ errors in the logs.
 
 ## 5. Cost per call minute
 
-Everything is billed by the minute or by usage, so the cost of one call minute is:
+Everything is billed by the minute or by usage:
 
 ```
-cost/min = T_in + T_stream + STT + TTS_chars × P_tts + LLM
-LLM      = turns/min × (input_tokens × P_in + output_tokens × P_out)
+cost/min = T_in + T_trunk + VOICE + BACKEND
+VOICE    = $0.05 per minute of GPT-Live session, billed per second
+BACKEND  = backend (Responses) tokens: input × P_in + cached input × P_cached + output × P_out
 ```
 
-| Term | What | Example price (check the linked page) |
+| Term | What | Price (check the linked page) |
 | --- | --- | --- |
-| `T_in` | Twilio inbound minute on your number | US local $0.0085/min; Lithuanian numbers are listed lower (about $0.004/min). [Twilio LT pricing](https://www.twilio.com/en-us/voice/pricing/lt), [US](https://www.twilio.com/en-us/voice/pricing/us) |
-| `T_stream` | Twilio Media Streams (the audio WebSocket) | $0.0044/min ([pricing](https://www.twilio.com/en-us/voice/pricing/us)) |
-| `STT` | Speech-to-text runs for the **whole** call, hold included (what the caller says on hold is transcribed) | Google STT v2 Chirp ~$0.016/min, Azure real-time ~$0.017/min, Deepgram Nova-3 below $0.01/min |
-| `TTS_chars × P_tts` | Only what the agent says live. Greeting, fillers and hold phrases are synthesized once and cached. About 300-400 characters per call minute. | Google Chirp 3 HD $30 per 1M chars (≈ $0.011/min), Azure Neural $15 per 1M (≈ $0.005/min) |
-| `LLM` | About 4 turns per minute. Each turn sends ~2k tokens of system prompt and tools (cached) plus the conversation so far (~1-3k), and gets ~50-150 tokens back | Claude Haiku 5.5: $0.10 per 1M input, $0.50 per 1M output → ≈ $0.002/min. The post-call summary adds about $0.001 per call |
+| `T_in` | Twilio inbound minute on your number | [Twilio LT pricing](https://www.twilio.com/en-us/voice/pricing/lt), [US](https://www.twilio.com/en-us/voice/pricing/us) |
+| `T_trunk` | Elastic SIP Trunking minute from Twilio to OpenAI | [Elastic SIP Trunking pricing](https://www.twilio.com/en-us/sip-trunking/pricing) |
+| `VOICE` | GPT-Live listens and speaks for the **whole** session, hold included | $0.05/min ([gpt-live-1](https://developers.openai.com/api/docs/models/gpt-live-1)) |
+| `BACKEND` | Only when GPT-Live delegates (decisions, function calls): a few short responses per call | gpt-6-luna: $0.10 per 1M input, $0.01 per 1M cached input, $0.50 per 1M output ([gpt-6-luna](https://developers.openai.com/api/docs/models/gpt-6-luna)) |
 
-Worked example: a Lithuanian Twilio number with Google STT and TTS and Claude Haiku 5.5:
+The voice minute dominates: a 2-minute call is $0.10 of voice plus well under a cent of backend
+tokens, plus Twilio's two per-minute items. The post-call summary is one more small backend
+request per call.
 
-```
-0.004 + 0.0044 + 0.016 + 0.011 + 0.002 ≈ $0.037 per minute  →  a 2-minute call ≈ $0.08
-```
-
-Speech recognition and synthesis are about 70% of it. The LLM is under 10%.
+Twilio's usage page (Console → Monitor → Usage) shows what real calls cost on its side.
 
 **Not in the per-minute formula:**
 
 - Your operator's charge for the forwarded leg (section 3.4). It is zero with a domestic number
   and an unlimited plan, but it can be the biggest item with a foreign number.
-- Monthly fixed costs: the Twilio number (US $1.15/month; Lithuanian prices are on the Twilio
-  LT page), hosting (Fly.io `shared-cpu-1x` 1 GB about $6/month plus about $0.15 for a 1 GB
-  volume; Render Starter $7/month plus disk), and the regulatory bundle (free).
+- Monthly fixed costs: the Twilio number (Lithuanian prices are on the Twilio LT page), hosting
+  (Fly.io `shared-cpu-1x` 512 MB plus a 1 GB volume; Render Starter plus disk), and the
+  regulatory bundle (free).
 - Telegram is free.
 
-Prices change. Check the pricing pages before you rely on the numbers. Twilio's usage page
-(Console → Monitor → Usage) shows what real calls cost.
+Prices change. Check the pricing pages before you rely on the numbers.

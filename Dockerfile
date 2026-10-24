@@ -1,9 +1,8 @@
-# Jarvis phone receptionist: one small container (FastAPI + Pipecat + Telegram long polling).
+# Jarvis phone receptionist: one small container (FastAPI + GPT-Live sideband + Telegram).
 #
-#   docker build -t dimidium .                              # Google speech (default)
-#   docker build --build-arg EXTRAS=google,azure -t dimidium .
+#   docker build -t dimidium .
 #
-# EXTRAS are the optional speech SDKs from pyproject.toml. Deepgram and ElevenLabs need none.
+# Audio never passes through this container: Twilio talks SIP to OpenAI directly.
 
 FROM python:3.12-slim-bookworm AS build
 
@@ -16,21 +15,13 @@ ENV PATH=/opt/venv/bin:$PATH
 WORKDIR /build
 COPY pyproject.toml README.md ./
 COPY app ./app
-ARG EXTRAS=google
-RUN pip install ".[${EXTRAS}]"
+RUN pip install .
 
 
 FROM python:3.12-slim-bookworm
 
-ARG EXTRAS=google
 # setpriv (util-linux, already in the base image) drops root in the entrypoint.
-# The Azure Speech SDK loads libasound at import time, even without an audio device.
-RUN case ",${EXTRAS}," in \
-      *,azure,*) apt-get update \
-        && apt-get install -y --no-install-recommends libasound2 \
-        && rm -rf /var/lib/apt/lists/* ;; \
-    esac \
-    && groupadd --system --gid 10001 app \
+RUN groupadd --system --gid 10001 app \
     && useradd --system --uid 10001 --gid app --create-home app \
     && mkdir -p /srv/data \
     && chown app:app /srv/data
@@ -40,8 +31,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PATH=/opt/venv/bin:$PATH \
     HOME=/home/app \
     PORT=8000 \
-    DB_PATH=/srv/data/dimidium.db \
-    PHRASE_CACHE_DIR=/srv/data/phrase_cache
+    DB_PATH=/srv/data/dimidium.db
 
 COPY --from=build /opt/venv /opt/venv
 WORKDIR /srv
@@ -49,7 +39,7 @@ COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 # For `python scripts/doctor.py` inside the container.
 COPY scripts ./scripts
 
-# SQLite database, phrase cache. Mount a volume here so call logs survive redeploys.
+# SQLite database. Mount a volume here so call logs survive redeploys.
 VOLUME ["/srv/data"]
 EXPOSE 8000
 

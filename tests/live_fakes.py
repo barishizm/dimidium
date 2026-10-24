@@ -6,7 +6,7 @@ from collections.abc import Awaitable, Callable, Coroutine
 from types import SimpleNamespace
 from typing import Any
 
-from app.agent.tools import OwnerOption
+from app.functions import OwnerOption
 from app.live.call import LiveCallTimings
 from app.live.transport import SidebandDisconnected
 from app.owner_channel import DecisionKind, OwnerDecision
@@ -228,7 +228,7 @@ class FakeChannel:
         self.info.append(text)
         return True
 
-    async def send_ring_alert(self, call_sid: str, text: str, *, offer_forward: bool) -> bool:
+    async def send_ring_alert(self, text: str) -> bool:
         self.ring_alerts.append(text)
         return True
 

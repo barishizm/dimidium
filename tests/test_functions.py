@@ -3,7 +3,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from app.agent.tools import (
+from app.functions import (
     MAX_OWNER_OPTIONS,
     TOOL_DEFINITIONS,
     TOOL_INPUT_MODELS,

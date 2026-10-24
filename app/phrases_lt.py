@@ -1,4 +1,4 @@
-"""Standard Lithuanian phrases the agent speaks verbatim (fixed prompts, TTS benchmark).
+"""Standard Lithuanian phrases the agent is told to say verbatim (GPT-Live speaks them).
 
 NATIVE-SPEAKER REVIEW NEEDED: written as natural, polite standard Lithuanian (formal "jūs"),
 but not yet checked by a native speaker. The owner is referred to as "jis" (he) and
@@ -45,11 +45,6 @@ PHRASES: tuple[Phrase, ...] = (
         "assistant, and the call is recorded and transcribed.",
     ),
     Phrase(
-        "ask_name_reason",
-        "Ar galėtumėte pasakyti savo vardą ir kokiu reikalu skambinate?",
-        "Could you tell me your name and what you are calling about?",
-    ),
-    Phrase(
         "hold",
         "Prašau trumpam palaukti, nepadėkite ragelio. Tuoj pasitikslinsiu.",
         "Please hold for a short moment, do not hang up. I will check right away.",
@@ -58,26 +53,6 @@ PHRASES: tuple[Phrase, ...] = (
         "still_trying",
         "Vis dar bandau su juo susisiekti. Ačiū, kad laukiate.",
         "I am still trying to reach him. Thank you for waiting.",
-    ),
-    Phrase(
-        "hold_still_here",
-        "Taip, aš čia. Vis dar laukiu atsakymo, prašau nepadėti ragelio.",
-        "Yes, I am here. I am still waiting for an answer, please do not hang up.",
-    ),
-    Phrase(
-        "unavailable_take_message",
-        "Deja, jis šiuo metu negali atsiliepti. Galiu užrašyti jūsų žinutę ir ją perduosiu.",
-        "Unfortunately he cannot answer right now. I can take your message and pass it on.",
-    ),
-    Phrase(
-        "message_taken",
-        "Jūsų žinutę užrašiau ir perduosiu jam kuo greičiau.",
-        "I have written down your message and will pass it on to him as soon as possible.",
-    ),
-    Phrase(
-        "repeat",
-        "Atsiprašau, neišgirdau. Ar galėtumėte pakartoti?",
-        "Sorry, I did not catch that. Could you repeat?",
     ),
     Phrase(
         "refuse_sensitive",
@@ -100,29 +75,6 @@ PHRASES: tuple[Phrase, ...] = (
         "goodbye",
         "Ačiū už skambutį. Viso gero!",
         "Thank you for calling. Goodbye!",
-    ),
-    # Live-call phrases: fillers against silence, and fallbacks that must work without the LLM.
-    Phrase(
-        "filler",
-        "Minutėlę.",
-        "One moment.",
-    ),
-    Phrase(
-        "filler_long",
-        "Atsiprašau, dar akimirką.",
-        "Sorry, just a moment more.",
-    ),
-    Phrase(
-        "are_you_there",
-        "Ar jūs dar girdite mane?",
-        "Can you still hear me?",
-    ),
-    Phrase(
-        "cant_hear",
-        "Atsiprašau, dėl techninių nesklandumų negaliu jūsų girdėti. Apie jūsų skambutį "
-        "pranešiu telefono savininkui.",
-        "Sorry, because of a technical problem I cannot hear you. I will tell the phone's owner "
-        "about your call.",
     ),
     Phrase(
         "time_limit",

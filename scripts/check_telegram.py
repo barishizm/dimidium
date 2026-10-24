@@ -7,7 +7,7 @@ Usage: python scripts/check_telegram.py
    (send your bot any message first, e.g. /start).
 3. If it is set: sends a test message to that chat.
 
-Do not run it while the app or the simulator is polling the same bot.
+Do not run it while the app is polling the same bot.
 """
 
 import asyncio

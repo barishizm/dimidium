@@ -5,7 +5,7 @@ Conversation style and when to delegate go in VOICE_PROMPT; business rules, secu
 and tool workflows go in BACKEND_PROMPT (see the live-prompting and live-delegation guides).
 """
 
-from app.speech.phrases_lt import PHRASES_BY_KEY
+from app.phrases_lt import PHRASES_BY_KEY
 
 # TODO(owner): DRAFT. Replace VOICE_PROMPT and BACKEND_PROMPT with the verbatim section A1 / A2
 # texts once provided. Keep the placeholders ({owner_name}, {hold_timeout}, {rules_summary}

@@ -6,7 +6,7 @@ import pytest
 from aiogram import Bot, Dispatcher
 from aiogram.types import Chat, Message, Update, User
 
-from app.agent.tools import OwnerOption
+from app.functions import OwnerOption
 from app.owner_channel import (
     CHOICE_REJECT,
     CHOICE_WRITE,
@@ -349,35 +349,6 @@ async def test_send_info_can_be_silent(channel: OwnerChannel, bot: FakeBot) -> N
     assert [m["disable_notification"] for m in bot.sent] == [True, False]
 
 
-async def test_ring_alert_forward_button(channel: OwnerChannel, bot: FakeBot) -> None:
-    from app.owner_channel import FORWARD_LABEL, ForwardCallback
-
-    forwarded: list[str] = []
-
-    async def on_forward(call_sid: str) -> str:
-        forwarded.append(call_sid)
-        return "📲 Arama telefonuna yönlendiriliyor."
-
-    await channel.send_ring_alert(CALL_A, "📞 Agate arıyor", offer_forward=True)
-    [alert] = bot.sent
-    [[button]] = alert["reply_markup"].inline_keyboard
-    assert button.text == FORWARD_LABEL
-    assert ForwardCallback.unpack(button.callback_data).call_sid == CALL_A
-
-    assert await channel.handle_forward(STRANGER, STRANGER, button.callback_data, 1) is None
-    assert "ayarlı değil" in (
-        await channel.handle_forward(OWNER, OWNER, button.callback_data, 1) or ""
-    )
-    channel.on_forward = on_forward
-    toast = await channel.handle_forward(OWNER, OWNER, button.callback_data, alert["message_id"])
-    assert toast and "yönlendiriliyor" in toast
-    assert forwarded == [CALL_A]
-    assert bot.edits[-1]["reply_markup"] is None
-    assert await channel.handle_forward(OWNER, OWNER, "fw:bad id!", 1) == "Geçersiz düğme."
-
-
-async def test_ring_alert_without_forward_has_no_buttons(
-    channel: OwnerChannel, bot: FakeBot
-) -> None:
-    await channel.send_ring_alert(CALL_A, "📞 Mom arıyor", offer_forward=False)
-    assert bot.sent[0]["reply_markup"] is None
+async def test_ring_alert_has_no_buttons(channel: OwnerChannel, bot: FakeBot) -> None:
+    await channel.send_ring_alert("📞 Mom arıyor")
+    assert bot.sent[0].get("reply_markup") is None

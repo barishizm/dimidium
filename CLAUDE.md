@@ -92,6 +92,6 @@ Items, in the order they usually come up:
 - lint: ruff check . && black --check .
 - production server (polite shutdown): python -m app.serve
 - container: docker compose up --build
-- whole-setup check: python scripts/doctor.py [--offline] (to be updated for OpenAI/SIP)
+- whole-setup check: python scripts/doctor.py [--offline]
 - SIP setup check: python scripts/check_sip.py [--offline] (docs/SETUP_SIP.md)
 - TODO after migration: adversarial model tests (real API, needs OPENAI_API_KEY), local test call without Twilio

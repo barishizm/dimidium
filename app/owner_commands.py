@@ -48,8 +48,7 @@ def format_rules(config: RulesConfig, *, off_mode_action: str) -> str:
     if allow:
         lines.append("\n✅ İzinli (her modda geçer, çalınca haber verilir):")
         for c in allow:
-            extra = " · yönlendirme teklif edilir" if c.offer_forward else ""
-            lines.append(f"• {c.name} {mask_number(c.number)}: “{c.alert_text}”{extra}")
+            lines.append(f"• {c.name} {mask_number(c.number)}: “{c.alert_text}”")
     if deny:
         lines.append("\n⛔ Engelli (cevaplanmaz, meşgul sesi):")
         lines += [f"• {mask_number(b.number)} {b.note}".rstrip() for b in deny]

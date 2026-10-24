@@ -24,7 +24,11 @@ services:
         sync: false   # https://<service>.onrender.com, or your custom domain
       - key: OWNER_NAME
         sync: false
-      - key: ANTHROPIC_API_KEY
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_WEBHOOK_SECRET
+        sync: false
+      - key: OPENAI_PROJECT_ID
         sync: false
       - key: TELEGRAM_BOT_TOKEN
         sync: false
@@ -36,14 +40,6 @@ services:
         sync: false
       - key: TWILIO_PHONE_NUMBER
         sync: false
-      - key: GOOGLE_CLOUD_PROJECT
-        sync: false
-      # Upload the key and rules as Secret Files (Environment tab): google.json, rules.yaml.
-      - key: GOOGLE_APPLICATION_CREDENTIALS
-        value: /etc/secrets/google.json
+      # Upload rules.yaml as a Secret File (Environment tab).
       - key: RULES_PATH
         value: /etc/secrets/rules.yaml
-      - key: STT_PROVIDER
-        value: google
-      - key: TTS_PROVIDER
-        value: google

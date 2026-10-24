@@ -2,8 +2,8 @@
 #
 # do_not_answer: exceptions that apply before the agent and before the /mode switch.
 #   allow  always screened (even in "off" mode); you get a Telegram alert the moment they ring
-#          (alert_tr, default "<name> arıyor"). offer_forward: true adds a button that forwards
-#          the live call to OWNER_FORWARD_NUMBER (a second call leg, the one exception).
+#          (alert_tr, default "<name> arıyor"). The agent still answers: calls are never
+#          transferred.
 #   deny   rejected with a busy signal: no agent, no AI cost, no notification.
 #
 # action values (known_numbers):
@@ -27,7 +27,6 @@ do_not_answer:
       name: "Agate"
       relation: partner
       alert_tr: "Agate arıyor"
-      offer_forward: true
   deny:
     - number: "+37060000099"
       note: "telemarketing"

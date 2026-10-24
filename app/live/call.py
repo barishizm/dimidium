@@ -25,8 +25,8 @@ from typing import Any, Protocol
 from pydantic import BaseModel, ValidationError
 
 from app import db
-from app.agent.guards import RISK_EVENTS, PrivateInfoGuard, detect_caller_risk
-from app.agent.tools import (
+from app.config import Settings
+from app.functions import (
     TOOL_INPUT_MODELS,
     AskOwnerInput,
     AskOwnerResult,
@@ -34,14 +34,14 @@ from app.agent.tools import (
     FlagSuspiciousInput,
     SaveMessageInput,
 )
-from app.config import Settings
+from app.guards import RISK_EVENTS, PrivateInfoGuard, detect_caller_risk
+from app.live.recorder import CallRecorder
 from app.live.transcript import TranscriptAssembler, disclosure_spoken
 from app.live.transport import CallControl, SidebandConnector, SidebandDisconnected, SidebandLink
 from app.models import CallSession, CallStatus, TranscriptTurn
 from app.owner_channel import OwnerChannel, make_ask_owner_handler, short_call_id
+from app.phrases_lt import PHRASES_BY_KEY
 from app.post_call import CallFacts, CallSummarizer, format_report, needs_attention, store_text
-from app.speech.phrases_lt import PHRASES_BY_KEY
-from app.telephony.call_handlers import CallRecorder
 
 logger = logging.getLogger(__name__)
 
@@ -197,7 +197,7 @@ class PendingResponse:
 
 
 class CallHost(Protocol):
-    """What a call needs from the app (TelephonyDeps implements it)."""
+    """What a call needs from the app (app.host.AppHost implements it)."""
 
     def spawn(self, coro: Coroutine[Any, Any, None]) -> None: ...
 
@@ -281,7 +281,7 @@ class LiveCall:
         )
         self._guard = PrivateInfoGuard.build(
             settings.private_term_list,
-            [settings.owner_forward_number, settings.twilio_phone_number],
+            [settings.owner_phone_number, settings.twilio_phone_number],
         )
 
         self._link: SidebandLink | None = None

@@ -42,8 +42,6 @@ class AllowedContact(KnownContact):
 
     # Turkish Telegram alert sent on ring, e.g. "Agate arıyor". Default: "<name> arıyor".
     alert_tr: str | None = None
-    # Offer the owner a button that forwards the live call to OWNER_FORWARD_NUMBER.
-    offer_forward: bool = False
 
     @property
     def alert_text(self) -> str:

@@ -20,7 +20,7 @@ So on SIP the caller hears spoken hold lines instead: the hold announcement, the
 ## What it would take on the relay path
 
 1. Build the relay first (Media Streams WebSocket ↔ GPT-Live WebSocket, `audio/pcmu` passthrough). It is a different transport, but the same session config and function flow (`app/live/config.py` already builds both).
-2. While `ask_owner` is pending, mix a quiet loop into the frames we send to Twilio. The old pipeline's generator and file loader (`app/telephony/hold_audio.py`, `HOLD_AUDIO_PATH`) can be reused, since they are already 8 kHz μ-law.
+2. While `ask_owner` is pending, mix a quiet loop into the frames we send to Twilio. The removed Pipecat pipeline had a generator and file loader for 8 kHz μ-law hold music (`app/telephony/hold_audio.py`, in git history before the cleanup) that could be restored.
 3. When GPT-Live speaks (a still-trying line, or an answer to the caller on hold), duck or pause the music and resume after its audio ends. If an instruction interrupts speech, clear the queued audio first, as the guide requires. An instruction acknowledgment is not a signal to resume.
 4. Keep the caller's microphone open (no `session.input_audio.mute`), so caller speech on hold is still transcribed and answered.
 5. Gate it behind a relay-only flag (e.g. `LIVE_HOLD_MUSIC=false` by default).
