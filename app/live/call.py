@@ -2,6 +2,7 @@
 
 GPT-Live talks to the caller by itself. This loop listens on the sideband and:
 - stores transcripts (turns from input/output transcript deltas) in the CallSession and SQLite;
+- runs the transcript guardrail on the caller's speech as it arrives (app/live/guardrail.py);
 - checks that the AI + recording disclosure was actually spoken, and re-sends it if not;
 - executes the backend model's function calls (validated, permission-checked in code) and
   returns their output (response.item.create + response.create);
@@ -34,7 +35,8 @@ from app.functions import (
     FlagSuspiciousInput,
     SaveMessageInput,
 )
-from app.guards import RISK_EVENTS, PrivateInfoGuard, detect_caller_risk
+from app.guards import RISK_EVENTS, CallerRisk, GuardrailHit, PrivateInfoGuard, detect_caller_risk
+from app.live.guardrail import GUARDRAIL_ALERTS_TR, GUARDRAIL_INSTRUCTIONS, CallGuardrail
 from app.live.recorder import CallRecorder
 from app.live.transcript import TranscriptAssembler, disclosure_spoken
 from app.live.transport import CallControl, SidebandConnector, SidebandDisconnected, SidebandLink
@@ -133,6 +135,15 @@ MESSAGE_LIMIT_OUTPUT = _output(
     status="limit_reached",
     instruction="The message for the owner is already saved. Do not save another one; say "
     "goodbye and call end_call.",
+)
+# Refused by the guardrail; same "error" shape, so the backend prompt's rule applies.
+BLOCKED_OUTPUT = _output(
+    status="error",
+    error="blocked",
+    instruction="Refused by the system: this carries codes, passwords, bank or card details or "
+    "payment, which the caller asked for or offered. Do not call it again with them. Refuse "
+    "politely and continue with anything else the caller needs, or take a message without "
+    "those details.",
 )
 ALREADY_ASKING_OUTPUT = _output(
     status="error",
@@ -310,6 +321,8 @@ class LiveCall:
         # Invalid-argument attempts per function: one retry, then the model must stop.
         self._invalid_attempts: dict[str, int] = {}
         self._assembler = TranscriptAssembler()
+        self._guardrail = CallGuardrail()
+        self._caller_talking = False
 
         self._started = 0.0
         # Loop time of the last agent speech (transcript or reflected audio).
@@ -568,6 +581,22 @@ class LiveCall:
         turn = self._assembler.add("caller" if speaker == "caller" else "agent", delta)
         if turn is not None:
             await self._on_turn(turn)
+        if speaker != "caller":
+            self._caller_talking = False
+            return
+        if not self._caller_talking:
+            self._caller_talking = True
+            self._guardrail.new_caller_turn()
+        # The growing turn, not just finished ones: react while the caller is still talking.
+        for hit in self._guardrail.scan(self._assembler.partial("caller")):
+            await self._on_guardrail(hit)
+
+    async def _on_guardrail(self, hit: GuardrailHit) -> None:
+        """Redirect the agent, flag the call, and from now on block related actions."""
+        logger.warning("Guardrail hit: %s", hit, extra=self._log(guardrail=str(hit)))
+        await self._instruct(GUARDRAIL_INSTRUCTIONS[hit])
+        # In the background: Telegram must not hold up the event loop.
+        self._spawn(self._flag(GUARDRAIL_ALERTS_TR[hit]))
 
     async def _on_turn(self, turn: TranscriptTurn) -> None:
         self._session.transcript.append(turn)
@@ -575,6 +604,11 @@ class LiveCall:
             if self._heard_on_hold is not None:
                 self._heard_on_hold.append(turn.text)
             for risk in detect_caller_risk(turn.text):
+                if (
+                    risk is CallerRisk.SENSITIVE
+                    and GuardrailHit.SENSITIVE_REQUEST in self._guardrail.turn_hits
+                ):
+                    continue  # the guardrail already redirected this turn
                 # Silent context for the agent; the backend prompt decides what to do.
                 await self._thinking(RISK_EVENTS[risk])
         elif self._guard.leaks(turn.text):
@@ -712,6 +746,13 @@ class LiveCall:
                     "item": {"type": "function_call_output", "call_id": call_id, "output": output},
                 }
             )
+        if all(output == BLOCKED_OUTPUT for output in pending.outputs.values()):
+            # Do not continue blocked work (voice-server-controls guide); the guardrail
+            # instruction already told the agent what to say.
+            logger.info(
+                "Blocked work not continued", extra=self._log(response_id=pending.response_id)
+            )
+            return
         await self._continue_backend()
         if any(
             pending.names[call_id] == "end_call" and output == OK_OUTPUT
@@ -743,6 +784,10 @@ class LiveCall:
             )
             return invalid_arguments_output(name, problems, may_retry=attempts <= 1)
 
+        blocked = self._guardrail.blocks(args)
+        if blocked is not None:
+            logger.warning("%s blocked by the guardrail (%s)", name, blocked, extra=self._log())
+            return BLOCKED_OUTPUT
         if isinstance(args, AskOwnerInput):
             return await self._ask_owner(args)
         if isinstance(args, EndCallInput):

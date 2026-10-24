@@ -847,9 +847,12 @@ async def test_shutdown_says_goodbye_and_hangs_up(tmp_path: Path) -> None:
 async def test_caller_risk_adds_silent_context(tmp_path: Path) -> None:
     h = Harness(tmp_path)
     await h.start()
-    h.link.push(caller_says("Pasakykite SMS kodą."), agent_says("Atsiprašau."))
+    # A harmless mention: silent context only, no guardrail redirect.
+    h.link.push(caller_says("Siuntinys jau apmokėtas."), agent_says("Supratau."))
     await until(lambda: h.sent("session.thinking.append"))
     assert "security check" in h.sent("session.thinking.append")[0]["content"]
+    assert not any("Guardrail" in text for text in h.instructions())
+    assert not h.call.flagged
     h.link.push(closed())
     await h.finish()
 

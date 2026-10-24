@@ -57,6 +57,23 @@ the stems catch the usual forms and spellings, and suggest common phrasings that
   `nepaisyk (savo/visų) instrukcij/nurodym/taisykl`, `pamiršk (savo/visas) instrukcij…`,
   `sistemos instrukcij/nurodym/užklaus`, `savo instrukcijas/nurodymus`,
   `aš esu (telefono) savinink…`, `čia (telefono) savininkas`.
+- **Guardrail: requests for codes, passwords, bank details, payment** (`app/guards.py`,
+  `_SENSITIVE_REQUEST`; matched without diacritics): `patvirtinimo/vienkartin…/sms/saugos/
+  prisijungimo/banko/smart-id kod…`, `kod… iš/gaut/atsiųst/kurį gavot…`,
+  `pasakyk/padiktuok/perskaityk/atsiųsk/perduok/duok/reik/nurodyk… (up to 3 words) kod…`,
+  `slaptažod`, `pin`, `kortel… numer/duomen`, `sąskaitos numer`,
+  `banko sąskait/rekvizit/duomen/kortel`, `reik…/turit…/turėsit…/prašau/galit… (up to 2
+  words) sumokėt/apmokėt/pervest/sumokėk/apmokėk`, `pervesk…`, `mokėjimo nuorod/duomen`.
+  "Jau apmokėta" (already paid) must **not** match. Missing phrasings are the most useful
+  feedback here.
+- **Guardrail: questions about the owner** (`app/guards.py`, `_OWNER_INFO`):
+  `kur jis/ji/savininkas/jie gyven/dirb/dabar/yra/būna/išvyk…`,
+  `jo/jos/savininko/jūsų/tavo (namų / gyvenamosios vietos) adres…`,
+  `jo/jos/savininko buvimo viet/tvarkarašt/grafik/planų/planai`,
+  `jo/jos/savininko (telefono) numer…`,
+  `kada jis/ji/savininkas grįš/grįžt/bus namie/bus namuose/išvyk/išeis/išlėk/nebus`,
+  `ar jis/ji/savininkas išvyk/atostog/užsieny/išlėkęs`, `ar namai tušti / bus tušti`.
+  "Ar esate namuose?" (are you home?) must **not** match: couriers ask it.
 - **Caller types** (`rules.example.yaml` keywords): `kurjer`, `siunt`, `pakuot`, `servis`,
   `remont`, `taisym`, `meistr`, `autoservis`, `pasiūlym`, `akcij`, `nuolaid`, `apklaus`,
   `reklam`, `tarif`.
